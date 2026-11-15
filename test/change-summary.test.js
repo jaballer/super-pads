@@ -119,10 +119,11 @@ test('channel conversion is listed for stored samples and queued imports', () =>
 test('pattern imports and removals are listed with replacements called out', () => {
   const state = editor();
   state.patterns.C2 = { ...state.patterns.C2, bytes: [1, 2, 3], summary: {} };
+  state.patterns.C5 = { ...state.patterns.C5, bytes: [9], summary: {} };
   const baseline = baselineOf(state);
   Object.assign(state.patterns.C2, { dirty: true, name: 'beat.mid' });
   Object.assign(state.patterns.D4, { dirty: true, bytes: [4], summary: {} });
-  state.patterns.C5 = { ...state.patterns.C5, bytes: [9], remove: true };
+  state.patterns.C5.remove = true;
 
   const summary = summarizeChanges(baseline, state);
   assert.deepEqual(summary.patterns.map((item) => [item.label, item.kind, item.details]), [
@@ -277,4 +278,28 @@ test('export settings on a freshly imported pattern are listed', () => {
   assert.deepEqual(summarizeChanges(baseline, state).patterns.map((item) => item.details), [
     ['Import pattern groove.mid', 'Export BPM: 96', 'Remember the MIDI note assignment used for export'],
   ]);
+});
+
+test('cancelling a queued import or pattern in an empty slot is not a deletion', () => {
+  const state = editor();
+  state.patterns.C5 = { ...state.patterns.C5 };
+  const baseline = baselineOf(state);
+  Object.assign(state.pads.B3, {
+    convert: true, avaliable: false, externalFile: '/x/a.wav', remove: true,
+  });
+  Object.assign(state.patterns.C5, { remove: true, bytes: [1], dirty: true });
+  state.patterns.D1 = { ...state.patterns.D1, bytes: [1], summary: {} };
+  baseline.patterns.D1 = JSON.parse(JSON.stringify(state.patterns.D1));
+  state.patterns.D1.remove = true;
+
+  const summary = summarizeChanges(baseline, state);
+  assert.deepEqual(summary.pads.map((item) => item.label), []);
+  assert.deepEqual(summary.patterns.map((item) => [item.label, item.kind]), [['D1', 'remove']]);
+  assert.equal(summary.removals, 1);
+
+  // Removing an import queued over an existing sample still deletes that sample.
+  const over = editor();
+  const overBaseline = baselineOf(over);
+  Object.assign(over.pads.A1, { convert: true, externalFile: '/x/a.wav', remove: true });
+  assert.deepEqual(summarizeChanges(overBaseline, over).pads.map((item) => [item.label, item.kind]), [['A1', 'remove']]);
 });

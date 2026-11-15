@@ -6,6 +6,8 @@ const { createCard } = require('./helpers');
 const runWorker = require('../src/runWorker');
 const writeCard = require('../src/writeCard');
 const cardFingerprint = require('../src/cardFingerprint');
+const { CardTransaction, SAMPLE_DIRECTORY } = require('../src/cardTransaction');
+const { writeNew } = require('../src/fileStorage');
 
 /** Read a card as the editor does and return a snapshot ready to save, plus the fingerprint it must present. */
 async function open(card) {
@@ -162,4 +164,45 @@ test('a card that changes while the save is staging is refused before the commit
   assert.equal(fs.existsSync(patternFile), true, 'the pattern file was not deleted');
   assert.equal(fs.existsSync(path.join(card.root, 'super-pads.json')), false);
   assert.equal(fs.existsSync(path.join(card.root, '.super-pads-transaction')), false);
+});
+
+test('a changed card is refused before any interrupted journal on it is recovered', async (t) => {
+  const card = await createCard();
+  t.after(() => fs.rmSync(card.root, { recursive: true, force: true }));
+  const { state, fingerprint } = await open(card);
+
+  // Leave a half-finished save on the card, as a different card with an interrupted journal would have.
+  const info = path.join(card.directory, 'PAD_INFO.BIN');
+  const tx = new CardTransaction(card.root);
+  writeNew(tx.stage(`${SAMPLE_DIRECTORY}/PAD_INFO.BIN`), Buffer.alloc(3840));
+  writeNew(tx.stage('super-pads.json'), '{}');
+  const rename = fs.renameSync;
+  const interrupt = mock.method(fs, 'renameSync', (source, target) => {
+    if (target === path.join(card.root, 'super-pads.json')) throw new Error('Simulated interruption');
+    return rename(source, target);
+  });
+  assert.throws(() => tx.commit(), /interruption/);
+  interrupt.mock.restore();
+  const interrupted = fs.readFileSync(info);
+
+  await assert.rejects(writeCard({ root: card.root, state, fingerprint }), /card has changed/);
+  assert.deepEqual(fs.readFileSync(info), interrupted, 'recovery did not run on the unidentified card');
+  assert.equal(fs.existsSync(path.join(card.root, '.super-pads-transaction')), true, 'the journal was left for the reopen flow');
+});
+
+test('a changed stretch in the middle of a long sample is noticed', async (t) => {
+  const card = await createCard();
+  t.after(() => fs.rmSync(card.root, { recursive: true, force: true }));
+  const sample = path.join(card.directory, 'A0000001.WAV');
+  const bytes = Buffer.alloc(1024 * 1024, 7);
+  fs.writeFileSync(sample, bytes);
+  const stamp = 1_700_000_000;
+  fs.utimesSync(sample, stamp, stamp);
+  const before = cardFingerprint(card.root);
+
+  // A stretch about as long as the probe spacing (1/32 of the file) cannot slip between probes.
+  bytes.fill(9, 400 * 1024, 400 * 1024 + 40 * 1024);
+  fs.writeFileSync(sample, bytes);
+  fs.utimesSync(sample, stamp, stamp);
+  assert.notEqual(cardFingerprint(card.root), before);
 });

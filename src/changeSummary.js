@@ -84,6 +84,9 @@ function summarizePad(pad, baselinePads, fates) {
   let kind = 'edit';
 
   if (pad.remove) {
+    // Removing a queued import from a slot that never held a sample only cancels the import; nothing on the card goes.
+    const origin = baselinePads[labelFromFilename(pad.sourceFilename || pad.filename)];
+    if (!origin?.samplePresent) return undefined;
     return { label: pad.label, kind: 'remove', details: ['Remove sample'] };
   }
   if (pad.convert) {
@@ -118,7 +121,11 @@ function summarizePad(pad, baselinePads, fates) {
 /** Describe a pattern slot's pending import or removal. */
 function summarizePattern(slot, baselinePatterns) {
   const saved = baselinePatterns[slot.label];
-  if (slot.remove) return { label: slot.label, kind: 'remove', details: ['Remove pattern'] };
+  if (slot.remove) {
+    // Cancelling a pattern queued into an empty slot leaves the card as it was.
+    if (!saved?.bytes && !saved?.error) return undefined;
+    return { label: slot.label, kind: 'remove', details: ['Remove pattern'] };
+  }
   if (!slot.dirty) {
     // Editor-only metadata is saved with the card's editor state even though the pattern file is untouched.
     const details = [];

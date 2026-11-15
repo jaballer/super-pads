@@ -10,27 +10,42 @@ const PATTERN_FILES = Array.from({ length: 120 }, (_, i) => `PTN${String(i).padS
 
 /** Bytes read from each end of a file; pattern files and short samples are therefore hashed completely. */
 const SAMPLE_BYTES = 64 * 1024;
+/** Evenly spaced probes between the two ends of long files, so a differing stretch in the middle is noticed. */
+const PROBES = 32;
+const PROBE_BYTES = 4096;
 
-/** Hash the head and tail of an open file; both ends are needed to notice same-length audio that differs. */
+/**
+ * Hash both ends of an open file plus evenly spaced probes across the middle. Files up to 128 KiB are hashed in full.
+ * Longer files are sampled: any changed stretch longer than the gap between probes (about 1/32 of the file) is
+ * seen, but a shorter edit that keeps both size and timestamp can still go unnoticed.
+ */
 function edgeDigest(fd, size) {
   const hash = createHash('sha256');
-  const head = Buffer.alloc(Math.min(size, SAMPLE_BYTES));
-  fs.readSync(fd, head, 0, head.length, 0);
-  hash.update(head);
-  if (size > SAMPLE_BYTES) {
-    const tail = Buffer.alloc(Math.min(size - SAMPLE_BYTES, SAMPLE_BYTES));
-    fs.readSync(fd, tail, 0, tail.length, size - tail.length);
-    hash.update(tail);
+  const read = (offset, length) => {
+    const chunk = Buffer.alloc(length);
+    fs.readSync(fd, chunk, 0, length, offset);
+    hash.update(chunk);
+  };
+  read(0, Math.min(size, SAMPLE_BYTES));
+  if (size > SAMPLE_BYTES) read(size - Math.min(size - SAMPLE_BYTES, SAMPLE_BYTES), Math.min(size - SAMPLE_BYTES, SAMPLE_BYTES));
+  const middleStart = SAMPLE_BYTES;
+  const middleLength = size - 2 * SAMPLE_BYTES;
+  if (middleLength > PROBE_BYTES) {
+    for (let i = 0; i < PROBES; i++) {
+      const offset = middleStart + Math.floor((middleLength - PROBE_BYTES) * i / (PROBES - 1));
+      read(offset, PROBE_BYTES);
+    }
   }
   return hash.digest('hex');
 }
 
 /**
  * Identify the card contents an editor session was built from: the full PAD_INFO.BIN bytes plus, for every sample and
- * pattern file (or its absence), its size, modification time, and a hash of its first and last 64 KiB. Sizes and
+ * pattern file (or its absence), its size, modification time, and a content digest (see edgeDigest). Sizes and
  * timestamps alone can match on a different card (for example a copy made with preserved times), so the content
- * samples catch swapped cards whose audio differs. Hashing every sample in full would read a whole card on each
- * check, so the middle of long samples is not read; pattern files and short samples are covered completely.
+ * samples catch swapped cards whose audio differs. Hashing every sample in full would read the whole card several
+ * times per save, so long samples are probed rather than read completely; pattern files and short samples are
+ * covered completely.
  * super-pads.json is excluded because only this application writes it. Throws if PAD_INFO.BIN is unreadable.
  */
 function cardFingerprint(root) {

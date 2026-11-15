@@ -59,11 +59,13 @@ function assertCardUnchanged(root, expected) {
  * The reply carries the card's new fingerprint for the next save.
  */
 async function writeCard({ root, state, fingerprint }) {
+  // Identity first: recovery restores and deletes sampler files, which must never happen to a card that is not
+  // the one the editor opened. Reopening the card is what recovers an interrupted journal.
+  if (fingerprint !== undefined) assertCardUnchanged(root, fingerprint);
   try { recoverCard(root); } catch (error) {
     error.recoveryRequired = true;
     throw error;
   }
-  if (fingerprint !== undefined) assertCardUnchanged(root, fingerprint);
   const { SP404PadInfo } = await loadDataTools();
   await decodePads(fs.readFileSync(path.join(root, SAMPLE_DIRECTORY, 'PAD_INFO.BIN')));
   const snapshot = structuredClone(state);
