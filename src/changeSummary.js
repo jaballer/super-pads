@@ -30,6 +30,31 @@ function settingChanges(before, after) {
     .map(([field, name]) => `${name}: ${show(before[field])} → ${show(after[field])}`);
 }
 
+/** A shallow copy without the named fields, used to compare everything the review does not describe. */
+const without = (item, fields) => Object.fromEntries(Object.entries(item || {}).filter(([key]) => !fields.includes(key)));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Fields the review describes for a pad that was only edited in place. */
+const DESCRIBED_PAD_FIELDS = [...SETTINGS.map(([field]) => field), 'targetChannels'];
+/** Fields the review describes for a pattern slot that was neither imported nor removed. */
+const DESCRIBED_PATTERN_FIELDS = ['bpm', 'noteMap'];
+
+/**
+ * Whether anything changed that the lists above cannot describe, independent of what else was summarized.
+ * Pads and slots that were moved, imported, or removed legitimately change most fields and are described as a whole,
+ * so only edited-in-place entries are compared, minus the fields the review reports by name.
+ */
+function hasUndescribedChanges(baseline, current) {
+  const sameKeys = (a, b) => same(Object.keys(a || {}), Object.keys(b || {}));
+  if (!sameKeys(baseline.pads, current.pads) || !sameKeys(baseline.patterns, current.patterns)) return true;
+  const plainPad = (pad) => !pad.convert && !pad.remove && !pad.relocated;
+  const padsChanged = Object.values(current.pads || {}).some((pad) => plainPad(pad)
+    && !same(without(pad, DESCRIBED_PAD_FIELDS), without(baseline.pads[pad.label], DESCRIBED_PAD_FIELDS)));
+  if (padsChanged) return true;
+  return Object.values(current.patterns || {}).some((slot) => !slot.dirty && !slot.remove
+    && !same(without(slot, DESCRIBED_PATTERN_FIELDS), without(baseline.patterns[slot.label], DESCRIBED_PATTERN_FIELDS)));
+}
+
 /**
  * Work out which card samples survive the write. A pad that still holds audio keeps the sample it started from
  * (its own, or the one moved or swapped into it); a pad queued for removal deletes its sample on purpose.
@@ -106,7 +131,8 @@ function summarizePattern(slot, baselinePatterns) {
  * Compare the editor with the snapshot taken when the card was last read or saved, and list what a write will do.
  * Both arguments are `{ pads, patterns }` maps keyed by slot label. Pure: nothing is read from disk or modified.
  * Returns `{ pads, patterns, other, count, removals }`; `count` is zero only when the two snapshots are identical.
- * `other` is a catch-all so an edit this module does not describe can never pass as "nothing to review".
+ * `other` is a catch-all so an edit this module does not describe can never pass as "nothing to review",
+ * whether it stands alone or comes with described changes.
  */
 function summarizeChanges(baseline, current) {
   const baselinePads = baseline?.pads || {};
@@ -124,8 +150,11 @@ function summarizeChanges(baseline, current) {
   const patterns = Object.values(current?.patterns || {}).map((slot) => summarizePattern(slot, baselinePatterns)).filter(Boolean);
   const removals = [...pads, ...patterns].filter((item) => item.kind === 'remove').length;
   const other = [];
-  if (!pads.length && !patterns.length
-    && JSON.stringify([baselinePads, baselinePatterns]) !== JSON.stringify([current?.pads || {}, current?.patterns || {}])) {
+  const currentSides = { pads: current?.pads || {}, patterns: current?.patterns || {} };
+  // Besides the pure-no-op test, an undescribed edit made alongside described ones must not go unreported either.
+  const unexplained = hasUndescribedChanges({ pads: baselinePads, patterns: baselinePatterns }, currentSides)
+    || (!pads.length && !patterns.length && !same([baselinePads, baselinePatterns], [currentSides.pads, currentSides.patterns]));
+  if (unexplained) {
     other.push({ label: '', kind: 'edit', details: ['Editor data changed. No sample or pattern files on the card are affected.'] });
   }
   return {

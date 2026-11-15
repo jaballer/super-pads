@@ -216,3 +216,36 @@ test('importing over an unreadable pattern file discloses the replacement', () =
     ['Import pattern (replaces an unreadable pattern file)'],
   ]);
 });
+
+test('an undescribed edit alongside described ones is still reported', () => {
+  const state = editor();
+  const baseline = baselineOf(state);
+  state.pads.A1.volume = 90; // described
+  state.pads.B7.format = 'AIFF'; // not described by the review
+
+  const summary = summarizeChanges(baseline, state);
+  assert.deepEqual(summary.pads.map((item) => item.label), ['A1']);
+  assert.equal(summary.other.length, 1);
+  assert.equal(summary.count, 2);
+
+  // The same holds for a pattern slot, and for a field changed on a pad that also has a described edit.
+  const withPattern = editor();
+  withPattern.patterns.C2 = { ...withPattern.patterns.C2, bytes: [1], summary: {} };
+  const patternBaseline = baselineOf(withPattern);
+  withPattern.patterns.C2.bpm = 100;
+  withPattern.patterns.C2.summary = { notes: [] };
+  assert.equal(summarizeChanges(patternBaseline, withPattern).other.length, 1);
+  state.pads.B7.format = 'WAVE';
+  state.pads.A1.format = 'AIFF';
+  assert.equal(summarizeChanges(baseline, state).other.length, 1);
+});
+
+test('legitimate moves, imports, and removals do not produce a catch-all entry', () => {
+  const state = editor();
+  const baseline = baselineOf(state);
+  assert.equal(transferPads(state.pads, 'A1', 'B5'), true);
+  Object.assign(state.pads.B2, { convert: true, avaliable: false, externalFile: '/x/a.wav', size: 999 });
+  state.pads.A2.remove = true;
+  state.pads.B9.volume = 3;
+  assert.equal(summarizeChanges(baseline, state).other.length, 0);
+});
