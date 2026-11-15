@@ -103,8 +103,11 @@ function summarizePad(pad, baselinePads, fates) {
     const settingsFrom = pad.settingsOrigin || (pad.relocated ? undefined : pad.label);
     if (settingsFrom) details.push(...settingChanges(baselinePads[settingsFrom], pad));
   } else if (pad.relocated && !pad.samplePresent) {
-    // The vacated half of a move is reported at the slot that receives the sample.
-    return undefined;
+    // The vacated half of a move is reported at the slot that receives the sample. The write resets every vacated
+    // slot to the sampler defaults, so one that held no sample before (a move into it and back out, say) loses
+    // whatever settings it had and needs its own line.
+    if (saved?.samplePresent) return undefined;
+    return { label: pad.label, kind: 'edit', details: ['Reset this empty slot\'s settings to the sampler defaults'] };
   } else if (pad.sourceFilename && pad.sourceFilename !== pad.filename) {
     kind = 'move';
     const from = labelFromFilename(pad.sourceFilename);

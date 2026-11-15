@@ -251,9 +251,11 @@ write.addEventListener('click', async () => {
   // Nothing pending still rewrites the card as before, so only real edits need a review.
   const summary = pendingChanges();
   if (summary.count) {
+    // The exact state being reviewed, not just its summary: a different source file with the same name reads alike.
+    const reviewed = editSignature();
     if (!await confirmChanges(summary)) return;
-    // The reviewed list is what the user agreed to; a card read or other update that landed meanwhile voids it.
-    if (busy || !cardReady || JSON.stringify(pendingChanges()) !== JSON.stringify(summary)) {
+    // The reviewed state is what the user agreed to; a card read or other update that landed meanwhile voids it.
+    if (busy || !cardReady || editSignature() !== reviewed) {
       showError('The pending changes were updated while you were reviewing them. Nothing was written. Review them again.');
       return;
     }

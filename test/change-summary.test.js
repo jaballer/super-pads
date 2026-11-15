@@ -317,11 +317,27 @@ test('settings edited after dragging a queued import to another pad are still li
   state.pads.B8.gate = false;
 
   const summary = summarizeChanges(baseline, state);
+  // B3 held no sample, so the write resets its settings; that is reported separately from the import.
   assert.deepEqual(summary.pads.map((item) => [item.label, item.details]), [
+    ['B3', ["Reset this empty slot's settings to the sampler defaults"]],
     ['B8', ['Import kick.wav', 'Volume: 40 → 100', 'Gate: on → off']],
   ]);
 
   // Moving it again keeps pointing at the slot the settings started on.
   assert.equal(transferPads(state.pads, 'B8', 'B9'), true);
-  assert.deepEqual(summarizeChanges(baseline, state).pads.map((item) => [item.label, item.details[1]]), [['B9', 'Volume: 40 → 100']]);
+  const moved = summarizeChanges(baseline, state).pads.find((item) => item.label === 'B9');
+  assert.deepEqual(moved.details, ['Import kick.wav', 'Volume: 40 → 100', 'Gate: on → off']);
+});
+
+test('an empty slot left behind by moving a sample away and back is reported as reset', () => {
+  const state = editor();
+  state.pads.B5.volume = 20; // an empty slot with saved, non-default settings
+  const baseline = baselineOf(state);
+  assert.equal(transferPads(state.pads, 'A1', 'B5'), true);
+  assert.equal(transferPads(state.pads, 'B5', 'A1'), true);
+
+  const summary = summarizeChanges(baseline, state);
+  assert.deepEqual(summary.pads.map((item) => [item.label, item.kind]), [['B5', 'edit']]);
+  assert.match(summary.pads[0].details[0], /Reset this empty slot's settings/);
+  assert.equal(summary.removals, 0);
 });

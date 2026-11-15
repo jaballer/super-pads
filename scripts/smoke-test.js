@@ -204,6 +204,15 @@ async function checkChangeReview(evaluate) {
   await evaluate(`state.pads.B2.volume = ${await evaluate('JSON.parse(savedSignature)[0].B2.volume')}; hideError()`);
   assert.equal(await evaluate('JSON.stringify(state)'), queued);
 
+  // The exact state is compared, not its summary: another file with the same name must void the review too.
+  await evaluate(`document.querySelector('button.write-card').click(); state.pads.A1.externalFile = '/elsewhere/' + state.pads.A1.externalFile.split('/').pop();`);
+  await evaluate(`${dialog}.querySelector('.confirm-review').click()`);
+  await waitFor(() => evaluate(`getComputedStyle(document.querySelector('p.errors')).display !== 'none'`), 'swapped source file reported');
+  assert.equal(await evaluate('busy'), false);
+  assert.deepEqual(fs.readFileSync(info), before);
+  await evaluate(`state.pads.A1.externalFile = ${JSON.stringify(card.file)}; hideError()`);
+  assert.equal(await evaluate('JSON.stringify(state)'), queued);
+
   // A queued removal is called out as destructive.
   await evaluate(`state.pads.A1.remove = true; document.querySelector('button.write-card').click()`);
   assert.match(await evaluate(`${dialog}.querySelector('.removals')?.textContent ?? ''`), /1 removal will delete data/);
