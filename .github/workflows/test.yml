@@ -59,4 +59,4 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Run the smoke test
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" npm run test:smoke
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" npm run test:smoke
