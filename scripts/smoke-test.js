@@ -70,6 +70,19 @@ async function waitFor(check, description) {
   throw new Error(`Timed out: ${description}`);
 }
 
+/** Click Write SD Card and accept the change review that opens whenever edits are pending. */
+async function clickWrite(evaluate) {
+  await evaluate(`document.querySelector('button.write-card').click()`);
+  // The review opens synchronously inside the click handler, before any asynchronous work starts.
+  if (await evaluate(`document.querySelector('dialog.change-review').open`)) {
+    await evaluate(`document.querySelector('dialog.change-review .confirm-review').click()`);
+    // The write starts when the dialog's asynchronous close event is handled; callers then wait for !busy.
+    await waitFor(async () => !(await evaluate(`document.querySelector('dialog.change-review').open`)), 'review closes');
+    // Edits were pending, so the write has started (busy) or already finished (nothing pending) once the handler ran.
+    await waitFor(() => evaluate('busy || !hasPendingEdits()'), 'confirmed write starts');
+  }
+}
+
 /** Wait for the real IPC reply and verify that canceling a picker preserves the complete editor snapshot. */
 async function checkPickerCancellation(evaluate, selector, channel) {
   const previous = await evaluate('JSON.stringify(state)');
@@ -129,10 +142,15 @@ async function checkUnsavedEditGuards(window, evaluate, sample) {
   assert.equal(messageBoxCalls, 3);
   await evaluate(`setExternalFile(${JSON.stringify(sample)}); hideError()`);
   assert.equal(await evaluate('hasPendingEdits()'), true);
-  await evaluate(`document.querySelector('button.write-card').click()`);
+  await clickWrite(evaluate);
   await waitFor(() => evaluate('!busy'), 'card write completes');
   assert.equal(await evaluate('hasPendingEdits()'), false);
   assert.equal(await beforeUnload(), false);
+
+  // With nothing pending there is nothing to review, so Write SD Card goes straight to the card.
+  await evaluate(`document.querySelector('button.write-card').click()`);
+  assert.equal(await evaluate(`document.querySelector('dialog.change-review').open`), false);
+  await waitFor(() => evaluate('!busy'), 'clean card write completes');
 
   // A setting edit is pending too, and reverting it makes the editor clean again.
   const volume = await evaluate('state.pads.A1.volume');
@@ -144,6 +162,44 @@ async function checkUnsavedEditGuards(window, evaluate, sample) {
 
   // Restore the queued import that the following checks build on.
   await evaluate(`renderLeft('A1'); setExternalFile(${JSON.stringify(sample)}); hideError()`);
+}
+
+/** Writing must show what will change first, and anything but an explicit confirmation must leave the card alone. */
+async function checkChangeReview(evaluate) {
+  const info = path.join(card.directory, 'PAD_INFO.BIN');
+  const before = fs.readFileSync(info);
+  const dialog = `document.querySelector('dialog.change-review')`;
+  assert.equal(await evaluate('hasPendingEdits()'), true);
+  const queued = await evaluate('JSON.stringify(state)');
+
+  // The import queued on A1 is listed, with the pad it lands on and the file it comes from.
+  await evaluate(`document.querySelector('button.write-card').click()`);
+  assert.equal(await evaluate(`${dialog}.open`), true);
+  const listed = await evaluate(`${dialog}.querySelector('.review-list').textContent`);
+  assert.match(listed, /A1/);
+  assert.match(listed, new RegExp(`Import ${path.basename(card.file).replace('.', '\\.')}`));
+  assert.match(await evaluate(`${dialog}.querySelector('.review-summary').textContent`), /1 pad change/);
+  assert.equal(await evaluate(`document.activeElement === ${dialog}.querySelector('.confirm-review')`), true);
+
+  // Keep Editing closes the review without writing or losing edits.
+  await evaluate(`${dialog}.querySelector('.cancel-review').click()`);
+  assert.equal(await evaluate(`${dialog}.open`), false);
+  assert.equal(await evaluate('busy'), false);
+  assert.equal(await evaluate('JSON.stringify(state)'), queued);
+  assert.deepEqual(fs.readFileSync(info), before);
+
+  // Dismissing with Escape behaves the same way; close() is what the browser does for it.
+  await evaluate(`document.querySelector('button.write-card').click(); ${dialog}.close()`);
+  assert.equal(await evaluate('busy'), false);
+  assert.equal(await evaluate('JSON.stringify(state)'), queued);
+  assert.deepEqual(fs.readFileSync(info), before);
+
+  // A queued removal is called out as destructive.
+  await evaluate(`state.pads.A1.remove = true; document.querySelector('button.write-card').click()`);
+  assert.match(await evaluate(`${dialog}.querySelector('.removals')?.textContent ?? ''`), /1 removal will delete data/);
+  assert.equal(await evaluate(`${dialog}.querySelector('.kind-remove') !== null`), true);
+  await evaluate(`${dialog}.querySelector('.cancel-review').click(); state.pads.A1.remove = false`);
+  assert.equal(await evaluate('JSON.stringify(state)'), queued);
 }
 
 /** Exercise the actual renderer, IPC, Node conversion threads, browser previews, and file-backed drop. */
@@ -362,7 +418,7 @@ async function checkPatterns(contents, evaluate) {
   await waitFor(() => evaluate(`state.patterns.F2.summary?.notes.length === 131`), 'native pattern import');
   await evaluate(`document.querySelector('.remove-pattern').click()`);
   assert.equal(await evaluate(`state.patterns.F2.remove`), true);
-  await evaluate(`document.querySelector('button.write-card').click()`);
+  await clickWrite(evaluate);
   await waitFor(() => evaluate('!busy'), 'patterns save together with queued samples');
   assert.deepEqual(Array.from(fs.readFileSync(path.join(card.root, 'ROLAND', 'SP-404SX', 'PTN', 'PTN00061.BIN'))), await evaluate('state.patterns.F1.bytes'));
   assert.equal(await evaluate(`state.patterns.F1.dirty`), undefined);
@@ -593,7 +649,7 @@ async function checkRegressions(contents, evaluate) {
   const readPads = () => SP404PadInfo.fromFile(fs.readFileSync(info)).pads;
   const readWave = () => fs.readFileSync(path.join(card.directory, 'A0000001.WAV'));
   async function writeCardUI() {
-    await evaluate(`document.querySelector('button.write-card').click()`);
+    await clickWrite(evaluate);
     await waitFor(() => evaluate('!busy'), 'card write completes');
   }
 
@@ -603,6 +659,7 @@ async function checkRegressions(contents, evaluate) {
   await checkPickerCancellation(evaluate, '.left .drop-zone', 'pickFile-task-finished');
   await checkPickerCancellation(evaluate, 'button.choose-folder', 'pickSDCard-task-finished');
   await checkUnsavedEditGuards(BrowserWindow.fromWebContents(contents), evaluate, card.file);
+  await checkChangeReview(evaluate);
 
   // Use real controls and on-card metadata to catch rounding or invalid input poisoning future saves.
   await evaluate(`

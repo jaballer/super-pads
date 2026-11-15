@@ -1036,7 +1036,7 @@ button.choose-folder[disabled] {
   }
 }
 
-.pattern-preview, .pattern-mapping {
+.pattern-preview, .pattern-mapping, .change-review {
   button {
     border: 1px solid #526070;
     border-radius: 6px;
@@ -1139,6 +1139,38 @@ button.choose-folder[disabled] {
   .mapping-validation.invalid { color: #f27373; }
   .mapping-footer { display: flex; align-items: center; gap: 12px; }
   .mapping-save-help { flex: 1; }
+}
+.change-review {
+  -webkit-app-region: no-drag;
+  width: min(560px, calc(100vw - 64px));
+  max-height: calc(100vh - 64px);
+  padding: 24px;
+  border: 1px solid #526070;
+  border-radius: 16px;
+  background: #29313d;
+  color: #fff;
+  box-shadow: 0 24px 80px #0008;
+  &::backdrop { background: #10151dcc; }
+  .review-form { display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 112px); }
+  .review-form > * { flex-shrink: 0; }
+  h2 { font-size: 22px; margin: 0; }
+  h3 { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #aeb7c5; margin: 14px 0 6px; }
+  .review-summary, .review-help { font-size: 12px; line-height: 1.6; color: #aeb7c5; margin: 0; }
+  .review-summary .removals { color: #f27373; font-weight: 700; }
+  // The list absorbs the height reduction in small windows, leaving both buttons visible.
+  .review-list {
+    flex: 1 1 auto; min-height: 0; max-height: 340px; overflow: auto;
+    border: 1px solid #3b4555; border-radius: 6px; padding: 0 12px 12px;
+    &:focus-visible { outline: 2px solid #739df2; outline-offset: 2px; }
+  }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid #3b4555; font-size: 12px; line-height: 1.5; }
+  li:last-child { border-bottom: 0; }
+  .review-label { flex: 0 0 34px; font-weight: 700; color: #ecd051; }
+  .review-details { margin: 0; padding: 0; overflow-wrap: anywhere; }
+  .kind-remove .review-label, .kind-remove .review-details { color: #f27373; }
+  .review-footer { display: flex; align-items: center; gap: 12px; }
+  .review-help { flex: 1; }
 }
 @media (max-width: 1300px), (max-height: 700px) {
   .container .right .middle.patterns-active .pattern-timeline-wrap { max-height: 110px; }

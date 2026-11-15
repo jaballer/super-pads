@@ -325,6 +325,21 @@
         </div>
       </form>
     </dialog>
+    <dialog class="change-review" aria-labelledby="review-title" aria-describedby="review-summary">
+      <form class="review-form" method="dialog">
+        <div>
+          <p class="eyebrow">Before writing</p>
+          <h2 id="review-title">Review changes</h2>
+        </div>
+        <p id="review-summary" class="review-summary"></p>
+        <div class="review-list" tabindex="0" role="region" aria-label="Pending changes"></div>
+        <div class="review-footer">
+          <p class="review-help">Nothing has been written yet. Keep editing to change your mind.</p>
+          <button class="cancel-review" type="submit" value="cancel">Keep Editing</button>
+          <button class="confirm-review primary" type="submit" value="write">Write SD Card</button>
+        </div>
+      </form>
+    </dialog>
     <script src="./src/perlin.js"></script>
     <script src="./src/renderer.js"></script>
   </body>

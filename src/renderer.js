@@ -7,6 +7,7 @@ const formatBytes = require('./src/formatBytes.js');
 const { canDragPad, transferPads } = require('./src/padTransfer.js');
 const PatternPanel = require('./src/patternPanel.js');
 const { emptyPatternSlots } = require('./src/patternSlots.js');
+const summarizeChanges = require('./src/changeSummary.js');
 
 /** Custom drag data is accepted only while this renderer owns an active pad drag. */
 const PAD_DRAG_TYPE = 'application/x-super-pads-pad';
@@ -171,7 +172,71 @@ for (const tab of document.querySelectorAll('.workspace-tabs [role="tab"]')) {
   });
 }
 const write = document.querySelector('button.write-card');
+
+/** What a write would change, compared with the card as last read or saved. */
+const pendingChanges = () => {
+  const [pads, patterns] = JSON.parse(savedSignature);
+  return summarizeChanges({ pads, patterns }, state);
+};
+
+const reviewDialog = document.querySelector('dialog.change-review');
+/** Build one titled list of changes. Text comes from card and file names, so it is never parsed as HTML. */
+const reviewSection = (title, items) => {
+  const section = document.createDocumentFragment();
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  const list = document.createElement('ul');
+  for (const item of items) {
+    const row = document.createElement('li');
+    row.className = `kind-${item.kind}`;
+    const label = document.createElement('span');
+    label.className = 'review-label';
+    label.textContent = item.label;
+    const details = document.createElement('div');
+    details.className = 'review-details';
+    for (const text of item.details) {
+      const line = document.createElement('div');
+      line.textContent = text;
+      details.append(line);
+    }
+    row.append(label, details);
+    list.append(row);
+  }
+  section.append(heading, list);
+  return section;
+};
+
+/** Show the pending changes in a modal and resolve true only when the user confirms the write. */
+const confirmChanges = (summary) => new Promise((resolve) => {
+  const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+  const parts = [];
+  if (summary.pads.length) parts.push(plural(summary.pads.length, 'pad change'));
+  if (summary.patterns.length) parts.push(plural(summary.patterns.length, 'pattern change'));
+  const text = reviewDialog.querySelector('.review-summary');
+  text.textContent = `${parts.join(' and ')} will be written to the card.`;
+  if (summary.removals) {
+    const removals = document.createElement('span');
+    removals.className = 'removals';
+    removals.textContent = ` ${plural(summary.removals, 'removal')} will delete data from the card.`;
+    text.append(removals);
+  }
+  const list = reviewDialog.querySelector('.review-list');
+  list.replaceChildren();
+  if (summary.pads.length) list.append(reviewSection('Pads', summary.pads));
+  if (summary.patterns.length) list.append(reviewSection('Patterns', summary.patterns));
+  list.scrollTop = 0;
+  reviewDialog.returnValue = '';
+  // Escape closes the dialog with no value, which counts as keeping the edits.
+  reviewDialog.addEventListener('close', () => resolve(reviewDialog.returnValue === 'write'), { once: true });
+  reviewDialog.showModal();
+  reviewDialog.querySelector('.confirm-review').focus();
+});
+
 write.addEventListener('click', async () => {
+  if (busy || !cardReady || reviewDialog.open) return;
+  // Nothing pending still rewrites the card as before, so only real edits need a review.
+  const summary = pendingChanges();
+  if (summary.count && !await confirmChanges(summary)) return;
   if (busy || !cardReady) return;
   busy = true;
   write.disabled = true;
