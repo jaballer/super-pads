@@ -248,3 +248,29 @@ test('no fingerprint is issued when the card stops matching the data that was ju
   assert.equal(result.fingerprint, undefined);
   assert.match(result.warning, /could not be verified afterwards.*Reopen it/);
 });
+
+test('a card that changes while backups are copied is refused before any file is replaced', async (t) => {
+  const card = await createCard();
+  t.after(() => fs.rmSync(card.root, { recursive: true, force: true }));
+  const { state, fingerprint } = await open(card);
+  state.pads.A1.volume = 21;
+  const info = path.join(card.directory, 'PAD_INFO.BIN');
+  const before = fs.readFileSync(info);
+  const newer = path.join(card.directory, 'C0000004.WAV');
+
+  // Another process writes to the card while the backup of PAD_INFO.BIN is being copied.
+  const original = fs.copyFileSync;
+  const tamper = mock.method(fs, 'copyFileSync', (source, destination, ...rest) => {
+    const result = original.call(fs, source, destination, ...rest);
+    if (String(destination).includes('backup-')) original.call(fs, card.file, newer);
+    return result;
+  });
+  t.after(() => tamper.mock.restore());
+
+  await assert.rejects(writeCard({ root: card.root, state, fingerprint }), /card has changed/);
+  tamper.mock.restore();
+  assert.deepEqual(fs.readFileSync(info), before, 'PAD_INFO.BIN was not replaced');
+  assert.equal(fs.existsSync(newer), true, 'the newer file was not touched');
+  assert.equal(fs.existsSync(path.join(card.root, '.super-pads-transaction')), false);
+  assert.equal(fs.existsSync(path.join(card.root, 'super-pads.json')), false);
+});

@@ -341,3 +341,17 @@ test('an empty slot left behind by moving a sample away and back is reported as 
   assert.match(summary.pads[0].details[0], /Reset this empty slot's settings/);
   assert.equal(summary.removals, 0);
 });
+
+test('importing over a moved sample discloses the settings it inherits at the destination', () => {
+  const state = editor();
+  state.pads.A1.volume = 10;
+  state.pads.B5.volume = 80; // an empty slot with saved settings
+  const baseline = baselineOf(state);
+  assert.equal(transferPads(state.pads, 'A1', 'B5'), true);
+  // The renderer drops the source filename when a file is imported over a moved sample.
+  Object.assign(state.pads.B5, { convert: true, avaliable: false, externalFile: '/x/new.wav' });
+  delete state.pads.B5.sourceFilename;
+
+  const b5 = summarizeChanges(baseline, state).pads.find((item) => item.label === 'B5');
+  assert.deepEqual(b5.details, ['Import new.wav', 'Volume: 80 → 10']);
+});

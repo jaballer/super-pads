@@ -691,6 +691,8 @@ ipcRenderer.on('pickSDCard-task-finished', async (event, { valid, root, error, c
   } else {
     // Reading a card replaces the editor's state, so queued edits need an explicit decision first.
     if (hasPendingEdits() && !await ipcRenderer.invoke('confirmDiscard')) return;
+    // Another reply may have started a read while this one waited; the root must only change together with its read.
+    if (busy) return;
     state.root = root;
 
     // Card metadata is authoritative: saved editor state can be stale after edits on the sampler.

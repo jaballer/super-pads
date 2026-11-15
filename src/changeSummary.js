@@ -99,9 +99,9 @@ function summarizePad(pad, baselinePads, fates) {
     const replaces = saved?.samplePresent && !fates.kept.has(pad.label);
     details.push(`Import ${name}${replaces ? ' (replaces the existing sample)' : ''}`);
     // The import keeps the settings of the slot it was queued on, and edits made afterwards are saved too. A moved
-    // import carries the label of that slot with it.
-    const settingsFrom = pad.settingsOrigin || (pad.relocated ? undefined : pad.label);
-    if (settingsFrom) details.push(...settingChanges(baselinePads[settingsFrom], pad));
+    // import carries the label of that slot with it. An import that replaced a moved saved sample has no origin
+    // of its own: it inherited that sample's settings, which are compared with what this slot holds now.
+    details.push(...settingChanges(baselinePads[pad.settingsOrigin || pad.label], pad));
   } else if (pad.relocated && !pad.samplePresent) {
     // The vacated half of a move is reported at the slot that receives the sample. The write resets every vacated
     // slot to the sampler defaults, so one that held no sample before (a move into it and back out, say) loses
