@@ -1,0 +1,58 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or PR makes the older run pointless.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  smoke:
+    name: Electron smoke test (headless)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # The smoke test opens a real Electron window. xvfb provides a virtual display so it runs without a screen,
+      # which also means it never steals focus on a developer's machine. Electron's Linux build needs these libraries.
+      - name: Install display server and Electron libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libasound2t64
+
+      # Electron's bundled sandbox helper must be root-owned and setuid on Linux, or the renderer refuses to start.
+      # Fixing the helper's permissions keeps the sandbox on rather than passing --no-sandbox.
+      - name: Configure the Chromium sandbox helper
+        run: |
+          sudo chown root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+
+      - name: Run the smoke test
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" npm run test:smoke
