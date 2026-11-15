@@ -30,8 +30,25 @@ function settingChanges(before, after) {
     .map(([field, name]) => `${name}: ${show(before[field])} → ${show(after[field])}`);
 }
 
+/**
+ * Work out which card samples survive the write. A pad that still holds audio keeps the sample it started from
+ * (its own, or the one moved or swapped into it); a pad queued for removal deletes its sample on purpose.
+ * Samples that are neither are overwritten or deleted as a side effect of another change, such as an import
+ * onto a slot that a moved sample had just vacated.
+ */
+function sampleFates(pads) {
+  const kept = new Set();
+  const removed = new Set();
+  for (const pad of Object.values(pads)) {
+    const origin = labelFromFilename(pad.sourceFilename || pad.filename);
+    if (pad.remove) removed.add(origin);
+    else if (pad.samplePresent && !pad.convert) kept.add(origin);
+  }
+  return { kept, removed };
+}
+
 /** Describe what the pad at one slot will do on the next write, or return nothing when it stays as it is. */
-function summarizePad(pad, baselinePads) {
+function summarizePad(pad, baselinePads, fates) {
   const saved = baselinePads[pad.label];
   const details = [];
   let kind = 'edit';
@@ -42,7 +59,9 @@ function summarizePad(pad, baselinePads) {
   if (pad.convert) {
     kind = 'import';
     const name = pad.externalFile ? path.basename(pad.externalFile) : 'audio file';
-    details.push(`Import ${name}${saved?.samplePresent ? ' (replaces the existing sample)' : ''}`);
+    // A sample that moved away before this import is not replaced here; one that has no other home is.
+    const replaces = saved?.samplePresent && !fates.kept.has(pad.label);
+    details.push(`Import ${name}${replaces ? ' (replaces the existing sample)' : ''}`);
   } else if (pad.relocated && !pad.samplePresent) {
     // The vacated half of a move is reported at the slot that receives the sample.
     return undefined;
@@ -76,7 +95,10 @@ function summarizePattern(slot, baselinePatterns) {
     return details.length ? { label: slot.label, kind: 'edit', details } : undefined;
   }
   const name = typeof slot.name === 'string' && slot.name ? ` ${slot.name}` : '';
-  const replaces = saved?.bytes ? ' (replaces the existing pattern)' : '';
+  let replaces = '';
+  if (saved?.bytes) replaces = ' (replaces the existing pattern)';
+  // An occupied slot whose file could not be parsed still holds card data that the import overwrites.
+  else if (saved?.error) replaces = ' (replaces an unreadable pattern file)';
   return { label: slot.label, kind: 'import', details: [`Import pattern${name}${replaces}`] };
 }
 
@@ -89,7 +111,16 @@ function summarizePattern(slot, baselinePatterns) {
 function summarizeChanges(baseline, current) {
   const baselinePads = baseline?.pads || {};
   const baselinePatterns = baseline?.patterns || {};
-  const pads = Object.values(current?.pads || {}).map((pad) => summarizePad(pad, baselinePads)).filter(Boolean);
+  const fates = sampleFates(current?.pads || {});
+  const pads = Object.values(current?.pads || {}).flatMap((pad) => {
+    const items = [summarizePad(pad, baselinePads, fates)];
+    const original = baselinePads[pad.label];
+    // The slot's original sample ends up nowhere and nothing here says so: it is a side effect of another edit.
+    if (original?.samplePresent && !pad.convert && !fates.kept.has(pad.label) && !fates.removed.has(pad.label)) {
+      items.push({ label: pad.label, kind: 'remove', details: ['Sample will be deleted (it was displaced by an import)'] });
+    }
+    return items;
+  }).filter(Boolean);
   const patterns = Object.values(current?.patterns || {}).map((slot) => summarizePattern(slot, baselinePatterns)).filter(Boolean);
   const removals = [...pads, ...patterns].filter((item) => item.kind === 'remove').length;
   const other = [];

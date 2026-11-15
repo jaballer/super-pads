@@ -54,7 +54,8 @@ function assertCardUnchanged(root, expected) {
  * Save a cloned editor snapshot as one recoverable card operation. Pending flags in the caller survive failures.
  * Stages and validates all sample changes before replacing samples, metadata, or the saved editor state.
  * When a fingerprint from the original card read is supplied, the save is refused unless the card still matches it,
- * so a swapped card or edits made on the sampler are never overwritten by a stale editor snapshot.
+ * both before staging and again immediately before the commit, so a swapped card or edits made on the sampler
+ * are never overwritten by a stale editor snapshot.
  * The reply carries the card's new fingerprint for the next save.
  */
 async function writeCard({ root, state, fingerprint }) {
@@ -166,6 +167,9 @@ async function writeCard({ root, state, fingerprint }) {
     }
     writeNew(transaction.stage(`${SAMPLE_DIRECTORY}/PAD_INFO.BIN`), metadata);
     writeNew(transaction.stage('super-pads.json'), JSON.stringify(snapshot, null, 2));
+    // Staging can take a while; check again right before the commit so a change made meanwhile is never overwritten.
+    // Staged files live in the transaction folder, which the fingerprint ignores, so this never trips on our own work.
+    if (fingerprint !== undefined) assertCardUnchanged(root, fingerprint);
     committed = { pads, patterns: snapshot.patterns, warning: transaction.commit() };
   } catch (error) {
     try { transaction.rollback(); } catch (recoveryError) {

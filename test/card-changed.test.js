@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { test } = require('node:test');
+const { test, mock } = require('node:test');
 const { createCard } = require('./helpers');
 const runWorker = require('../src/runWorker');
 const writeCard = require('../src/writeCard');
@@ -108,4 +108,58 @@ test('the save worker requires a fingerprint from the card read', async (t) => {
   const before = fs.readFileSync(path.join(card.directory, 'PAD_INFO.BIN'));
   await assert.rejects(runWorker('writeCard', { root: card.root, state }), /Missing card fingerprint/);
   assert.deepEqual(fs.readFileSync(path.join(card.directory, 'PAD_INFO.BIN')), before);
+});
+
+test('same-length audio with preserved timestamps still changes the fingerprint', async (t) => {
+  const card = await createCard();
+  t.after(() => fs.rmSync(card.root, { recursive: true, force: true }));
+  const sample = path.join(card.directory, 'A0000001.WAV');
+  fs.copyFileSync(card.file, sample);
+  // A whole-second timestamp restores exactly; fractional times can shift by a millisecond through Date rounding.
+  const stamp = 1_700_000_000;
+  fs.utimesSync(sample, stamp, stamp);
+  const before = cardFingerprint(card.root);
+
+  // Flip one byte at each end, then restore the original timestamps, as a time-preserving copy would.
+  for (const offset of [100, fs.statSync(sample).size - 10]) {
+    const bytes = fs.readFileSync(sample);
+    bytes[offset] ^= 0xff;
+    fs.writeFileSync(sample, bytes);
+    fs.utimesSync(sample, stamp, stamp);
+    assert.notEqual(cardFingerprint(card.root), before, `byte at ${offset}`);
+    bytes[offset] ^= 0xff;
+    fs.writeFileSync(sample, bytes);
+    fs.utimesSync(sample, stamp, stamp);
+    assert.equal(cardFingerprint(card.root), before);
+  }
+});
+
+test('a card that changes while the save is staging is refused before the commit', async (t) => {
+  const card = await createCard();
+  t.after(() => fs.rmSync(card.root, { recursive: true, force: true }));
+  const patterns = path.join(card.root, 'ROLAND', 'SP-404SX', 'PTN');
+  fs.mkdirSync(patterns, { recursive: true });
+  const patternFile = path.join(patterns, 'PTN00005.BIN');
+  fs.writeFileSync(patternFile, Buffer.alloc(16));
+  const { state, fingerprint } = await open(card);
+  state.patterns.A5 = { label: 'A5', filename: 'PTN00005.BIN', remove: true };
+  const info = path.join(card.directory, 'PAD_INFO.BIN');
+  const before = fs.readFileSync(info);
+
+  // The pattern directory is prepared during staging, after the first check has passed.
+  const original = fs.mkdirSync;
+  const tamper = mock.method(fs, 'mkdirSync', (...args) => {
+    const result = original.apply(fs, args);
+    fs.copyFileSync(card.file, path.join(card.directory, 'C0000004.WAV'));
+    return result;
+  });
+  t.after(() => tamper.mock.restore());
+
+  await assert.rejects(writeCard({ root: card.root, state, fingerprint }), /card has changed/);
+  assert.equal(tamper.mock.callCount() > 0, true, 'the staging hook ran');
+  tamper.mock.restore();
+  assert.deepEqual(fs.readFileSync(info), before);
+  assert.equal(fs.existsSync(patternFile), true, 'the pattern file was not deleted');
+  assert.equal(fs.existsSync(path.join(card.root, 'super-pads.json')), false);
+  assert.equal(fs.existsSync(path.join(card.root, '.super-pads-transaction')), false);
 });

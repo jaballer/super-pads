@@ -167,3 +167,52 @@ test('an edit with no description still counts as a change instead of passing as
   assert.equal(summary.other.length, 1);
   assert.equal(summary.count, 1);
 });
+
+test('a sample moved away and then overwritten by an import is reported as deleted', () => {
+  const state = editor();
+  const baseline = baselineOf(state);
+  assert.equal(transferPads(state.pads, 'A1', 'B1'), true);
+  Object.assign(state.pads.B1, { convert: true, avaliable: false, externalFile: '/x/new.wav' });
+  delete state.pads.B1.sourceFilename;
+
+  const summary = summarizeChanges(baseline, state);
+  assert.deepEqual(summary.pads.map((item) => [item.label, item.kind, item.details]), [
+    ['A1', 'remove', ['Sample will be deleted (it was displaced by an import)']],
+    ['B1', 'import', ['Import new.wav']],
+  ]);
+  assert.equal(summary.removals, 1);
+});
+
+test('a swap followed by an import reports the displaced sample, not a false replacement', () => {
+  const state = editor();
+  const baseline = baselineOf(state);
+  assert.equal(transferPads(state.pads, 'A1', 'A2'), true); // A1 now holds A2's sample and A2 holds A1's
+  Object.assign(state.pads.A1, { convert: true, externalFile: '/x/new.wav' });
+  delete state.pads.A1.sourceFilename;
+
+  const summary = summarizeChanges(baseline, state);
+  assert.deepEqual(summary.pads.map((item) => [item.label, item.kind, item.details]), [
+    ['A1', 'import', ['Import new.wav']],
+    ['A2', 'move', ['Move sample here from A1']],
+    ['A2', 'remove', ['Sample will be deleted (it was displaced by an import)']],
+  ]);
+});
+
+test('moves, swaps, and explicit removals never report displaced samples', () => {
+  const state = editor();
+  const baseline = baselineOf(state);
+  assert.equal(transferPads(state.pads, 'A1', 'A2'), true);
+  assert.equal(transferPads(state.pads, 'A1', 'B3'), true);
+  state.pads.A2.remove = true;
+  assert.equal(summarizeChanges(baseline, state).pads.some((item) => item.details[0].startsWith('Sample will be deleted')), false);
+});
+
+test('importing over an unreadable pattern file discloses the replacement', () => {
+  const state = editor();
+  state.patterns.C2 = { ...state.patterns.C2, error: 'Invalid pattern file.' };
+  const baseline = baselineOf(state);
+  Object.assign(state.patterns.C2, { dirty: true, bytes: [1], summary: {} });
+  assert.deepEqual(summarizeChanges(baseline, state).patterns.map((item) => item.details), [
+    ['Import pattern (replaces an unreadable pattern file)'],
+  ]);
+});
