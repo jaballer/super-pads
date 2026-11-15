@@ -10,6 +10,10 @@ const { CardTransaction, recoverCard, SAMPLE_DIRECTORY } = require('./cardTransa
 const { inspectPattern } = require('./patternMetadata');
 const { patternFilename } = require('./patternSlots');
 const { PATTERN_DIRECTORY } = require('./readPatterns');
+const cardFingerprint = require('./cardFingerprint');
+
+const CARD_CHANGED = 'The card has changed since it was opened (it may have been swapped, ejected, or edited on the sampler). '
+  + 'Nothing was written. Reopen the card to continue; reopening discards your pending edits.';
 
 /** Run at most two sample-staging jobs; await every started job before allowing rollback. */
 async function stageQueuedSamples(jobs) {
@@ -39,15 +43,26 @@ function convertOffsets(pad, source, size) {
   }
 }
 
+/** Compare the card on disk with the fingerprint taken when the editor read it; unreadable cards count as changed. */
+function assertCardUnchanged(root, expected) {
+  let current;
+  try { current = cardFingerprint(root); } catch { /* An unreadable card is reported as changed below. */ }
+  if (current !== expected) throw new Error(CARD_CHANGED);
+}
+
 /**
  * Save a cloned editor snapshot as one recoverable card operation. Pending flags in the caller survive failures.
  * Stages and validates all sample changes before replacing samples, metadata, or the saved editor state.
+ * When a fingerprint from the original card read is supplied, the save is refused unless the card still matches it,
+ * so a swapped card or edits made on the sampler are never overwritten by a stale editor snapshot.
+ * The reply carries the card's new fingerprint for the next save.
  */
-async function writeCard({ root, state }) {
+async function writeCard({ root, state, fingerprint }) {
   try { recoverCard(root); } catch (error) {
     error.recoveryRequired = true;
     throw error;
   }
+  if (fingerprint !== undefined) assertCardUnchanged(root, fingerprint);
   const { SP404PadInfo } = await loadDataTools();
   await decodePads(fs.readFileSync(path.join(root, SAMPLE_DIRECTORY, 'PAD_INFO.BIN')));
   const snapshot = structuredClone(state);
@@ -61,6 +76,7 @@ async function writeCard({ root, state }) {
     }
   }
   const transaction = new CardTransaction(root);
+  let committed;
   try {
     const jobs = [];
     const replacements = new Map();
@@ -150,8 +166,7 @@ async function writeCard({ root, state }) {
     }
     writeNew(transaction.stage(`${SAMPLE_DIRECTORY}/PAD_INFO.BIN`), metadata);
     writeNew(transaction.stage('super-pads.json'), JSON.stringify(snapshot, null, 2));
-    const warning = transaction.commit();
-    return { pads, patterns: snapshot.patterns, warning };
+    committed = { pads, patterns: snapshot.patterns, warning: transaction.commit() };
   } catch (error) {
     try { transaction.rollback(); } catch (recoveryError) {
       const pending = new Error(`${error.message} Recovery is pending; reopen this card to retry recovery. ${recoveryError.message}`);
@@ -160,6 +175,14 @@ async function writeCard({ root, state }) {
     }
     throw error;
   }
+  // The save is durable here; a failure to re-read the card must not be reported as a failed save.
+  try {
+    committed.fingerprint = cardFingerprint(root);
+  } catch (error) {
+    const note = `Saved, but the card could not be re-read (${error.message}). Reopen it before saving again.`;
+    committed.warning = committed.warning ? `${committed.warning} ${note}` : note;
+  }
+  return committed;
 }
 
 module.exports = writeCard;

@@ -20,6 +20,13 @@ let state = {
   currentPad: 'A1',
   patterns: emptyPatternSlots(),
 };
+/** Identifies the card contents `state` was read from; saves are refused if the card no longer matches it. */
+let cardFingerprint;
+/** Everything a user can edit. Settings change pad fields in place, so edits are found by comparing snapshots. */
+const editSignature = () => JSON.stringify([state.pads, state.patterns]);
+/** Signature of the last card read or save; differing from it means edits exist that are not on the card. */
+let savedSignature = editSignature();
+const hasPendingEdits = () => editSignature() !== savedSignature;
 /** Selection belongs to this editor session; card snapshots retain only the active pad. */
 let selectedPads = new Set(['A1']);
 /** Fixed origin for repeated Shift-click ranges in bank/number order. */
@@ -172,10 +179,14 @@ write.addEventListener('click', async () => {
   preview.clear();
   showLoading();
   try {
-    const { pads, patterns, warning } = await runWorker('writeCard', { root: state.root, state });
+    const {
+      pads, patterns, warning, fingerprint,
+    } = await runWorker('writeCard', { root: state.root, state, fingerprint: cardFingerprint });
     preview.cache.clear();
     state.pads = Object.fromEntries(pads.map((pad) => [pad.label, pad]));
     state.patterns = patterns || emptyPatternSlots();
+    cardFingerprint = fingerprint;
+    savedSignature = editSignature();
     renderPads();
     patternPanel.render();
     if (warning) showError(warning);
@@ -579,7 +590,7 @@ document.querySelector('button.choose-folder').addEventListener('click', () => {
 });
 
 // #region IPC Main Tasks
-ipcRenderer.on('pickSDCard-task-finished', (event, { valid, root, error, canceled }) => {
+ipcRenderer.on('pickSDCard-task-finished', async (event, { valid, root, error, canceled }) => {
   if (busy || canceled) return;
   if (error) {
     document.querySelector('button.choose-folder').disabled = false;
@@ -590,11 +601,21 @@ ipcRenderer.on('pickSDCard-task-finished', (event, { valid, root, error, cancele
     document.querySelector('button.choose-folder').disabled = false;
     showError('Not a valid Roland SD Card directory root.');
   } else {
+    // Reading a card replaces the editor's state, so queued edits need an explicit decision first.
+    if (hasPendingEdits() && !await ipcRenderer.invoke('confirmDiscard')) return;
     state.root = root;
 
     // Card metadata is authoritative: saved editor state can be stale after edits on the sampler.
     parsePads();
   }
+});
+
+// Closing the window or quitting would drop queued edits; main shows the confirmation (will-prevent-unload).
+window.addEventListener('beforeunload', (event) => {
+  if (!hasPendingEdits()) return;
+  event.preventDefault();
+  // eslint-disable-next-line no-param-reassign
+  event.returnValue = false;
 });
 ipcRenderer.on('pickFile-task-finished', (event, { file, error, canceled }) => {
   if (canceled) return;
@@ -619,9 +640,11 @@ const parsePads = async () => {
   preview.clear();
   showLoading();
   try {
-    const { pads, patterns } = await runWorker('parsePads', { root: state.root });
+    const { pads, patterns, fingerprint } = await runWorker('parsePads', { root: state.root });
     state.pads = Object.fromEntries(pads.map((pad) => [pad.label, { ...pad, convert: false, remove: false }]));
     state.patterns = patterns;
+    cardFingerprint = fingerprint;
+    savedSignature = editSignature();
     selectedPads = new Set([state.currentPad]);
     selectionAnchor = state.currentPad;
     cardReady = true;
@@ -632,6 +655,9 @@ const parsePads = async () => {
     preview.clear();
     togglePicker(false);
     patternPanel.render();
+    cardFingerprint = undefined;
+    // The unreadable card hides the editor, and the user already agreed to discard what it held.
+    savedSignature = editSignature();
     showError(`Card unavailable: ${error.message}`);
   } finally {
     busy = false;

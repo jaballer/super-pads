@@ -35,8 +35,30 @@ ipcMain.handle('runDataWorker', async (_event, { name, data }) => {
   }
 });
 
-// Catch Fatal Exceptions
-process.on('uncaughtException', (_error) => {
+/** Ask before discarding edits that exist only in the editor; the safe choice is the default and Escape. */
+const discardPrompt = () => ({
+  type: 'warning',
+  buttons: ['Keep Editing', 'Discard Changes'],
+  defaultId: 0,
+  cancelId: 0,
+  title: 'Unsaved changes',
+  message: 'Discard your pending changes?',
+  detail: 'Imports, moves, removals, setting changes and patterns are only saved to the SD card when you click Write SD Card.',
+});
+
+/** Resolve true only when the user explicitly chooses to discard the editor's queued edits. */
+ipcMain.handle('confirmDiscard', async (event) => {
+  const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), discardPrompt());
+  return response === 1;
+});
+
+// Catch Fatal Exceptions: tell the user why the app is closing. Card saves are transactional, so a save
+// interrupted by this exit is recovered the next time the card is opened.
+process.on('uncaughtException', (error) => {
+  console.error(error);
+  try {
+    dialog.showErrorBox('Super Pads has to close', `${error?.message || error}\n\nIf a save was in progress, reopen the card to recover it.`);
+  } catch { /* The dialog is best effort; exiting is what matters. */ }
   app.exit(1);
 });
 
@@ -68,6 +90,11 @@ function createWindow() {
       nodeIntegrationInWorker: true,
       devTools: false,
     },
+  });
+
+  // The renderer cancels unloads while edits are queued; the user decides here whether to discard them.
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    if (dialog.showMessageBoxSync(mainWindow, discardPrompt()) === 1) event.preventDefault();
   });
 
   // Disable Refresh

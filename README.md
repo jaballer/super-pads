@@ -23,7 +23,7 @@ Check the [releases page](https://github.com/MatthewCallis/super-pads/releases) 
 1. If any error comes up you will see it above the pad matrix, click it to dismiss.
 1. If you think something should be working but it not, please [file an issue](https://github.com/MatthewCallis/super-pads/issues) or [tweet at me](https://twitter.com/superfamicom/status/1343989480160522240).
 
-Card writes stage imports and transfers before changing the card and keep recovery backups until the save completes. Failed conversions retain your pending edits for a retry. If a save is interrupted, reopen the card in Super Pads to recover it before using it in the sampler. Leave the `.super-pads-transaction` recovery folder in place until recovery completes. Staging and backups require free space for the changed samples and their previous versions.
+Card writes stage imports and transfers before changing the card and keep recovery backups until the save completes. Failed conversions retain your pending edits for a retry. If a save is interrupted, reopen the card in Super Pads to recover it before using it in the sampler. Leave the `.super-pads-transaction` recovery folder in place until recovery completes. A save is refused, with nothing written, if the card was swapped, ejected, or changed on the sampler after it was opened; reopen the card to continue. Reopening a card or closing the app while edits are still queued asks you to confirm first. Staging and backups require free space for the changed samples and their previous versions.
 
 ### Patterns
 
