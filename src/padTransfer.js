@@ -20,8 +20,11 @@ function transferPads(pads, sourceLabel, targetLabel) {
     // Pending imports own their external source; saved samples still belong to their original disk file.
     if (contents.samplePresent && !contents.convert) {
       pad.sourceFilename = contents.sourceFilename || contents.filename;
+      delete pad.settingsOrigin;
     } else {
       delete pad.sourceFilename;
+      // A pending import has no card file, so remember the slot its settings came from for the change review.
+      pad.settingsOrigin = contents.settingsOrigin || contents.label;
     }
     return pad;
   }

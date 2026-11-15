@@ -80,6 +80,7 @@ async function writeCard({ root, state, fingerprint }) {
   }
   const transaction = new CardTransaction(root);
   let committed;
+  let written;
   try {
     const jobs = [];
     const replacements = new Map();
@@ -145,9 +146,11 @@ async function writeCard({ root, state, fingerprint }) {
       delete pad.targetChannels;
       delete pad.sourceFilename;
       delete pad.relocated;
+      delete pad.settingsOrigin;
     }
     // Finish asynchronous validation before allocating the staged metadata destination.
     const metadata = await encodePads(pads);
+    written = metadata;
     for (const [label, slot] of Object.entries(snapshot.patterns || {})) {
       if (slot.label !== label || slot.filename !== patternFilename(label)) throw new Error('Invalid pattern slot identity.');
       if (!slot.dirty && !slot.remove) continue;
@@ -181,11 +184,16 @@ async function writeCard({ root, state, fingerprint }) {
     }
     throw error;
   }
-  // The save is durable here; a failure to re-read the card must not be reported as a failed save.
+  // The save is durable here; a failure to verify the card must not be reported as a failed save. The returned
+  // fingerprint becomes the editor's next baseline, so it is only issued when the card still holds exactly what
+  // was just written and did not change while it was scanned. Otherwise the editor must reopen the card.
   try {
-    committed.fingerprint = cardFingerprint(root);
+    const fresh = cardFingerprint(root);
+    if (!fs.readFileSync(path.join(root, SAMPLE_DIRECTORY, 'PAD_INFO.BIN')).equals(written)) throw new Error('the card no longer holds the saved data');
+    if (cardFingerprint(root) !== fresh) throw new Error('the card changed while it was being read');
+    committed.fingerprint = fresh;
   } catch (error) {
-    const note = `Saved, but the card could not be re-read (${error.message}). Reopen it before saving again.`;
+    const note = `Saved, but the card could not be verified afterwards (${error.message}). Reopen it before saving again.`;
     committed.warning = committed.warning ? `${committed.warning} ${note}` : note;
   }
   return committed;

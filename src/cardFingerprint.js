@@ -46,7 +46,8 @@ function edgeDigest(fd, size) {
  * samples catch swapped cards whose audio differs. Hashing every sample in full would read the whole card several
  * times per save, so long samples are probed rather than read completely; pattern files and short samples are
  * covered completely.
- * super-pads.json is excluded because only this application writes it. Throws if PAD_INFO.BIN is unreadable.
+ * The editor's own super-pads.json is included too, so cards whose sampler files match but whose saved metadata
+ * differs are told apart. Throws if PAD_INFO.BIN is unreadable.
  */
 function cardFingerprint(root) {
   const hash = createHash('sha256');
@@ -73,6 +74,13 @@ function cardFingerprint(root) {
   };
   addFiles(samples, SAMPLE_FILES);
   addFiles(path.join(root, PATTERN_DIRECTORY), PATTERN_FILES);
+  // The saved editor metadata (pattern names, export tempos, note maps) is part of what a session was built from.
+  // Only this application writes it, and every save returns a fresh fingerprint that already includes it.
+  let metadata = 'absent';
+  try { metadata = createHash('sha256').update(fs.readFileSync(path.join(root, 'super-pads.json'))).digest('hex'); } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  hash.update(`\nsuper-pads.json:${metadata}`);
   return hash.digest('hex');
 }
 

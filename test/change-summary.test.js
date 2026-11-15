@@ -293,7 +293,9 @@ test('cancelling a queued import or pattern in an empty slot is not a deletion',
   state.patterns.D1.remove = true;
 
   const summary = summarizeChanges(baseline, state);
-  assert.deepEqual(summary.pads.map((item) => item.label), []);
+  // Nothing is deleted, but the write resets the slot's settings, so the cancellation is still disclosed.
+  assert.deepEqual(summary.pads.map((item) => [item.label, item.kind]), [['B3', 'edit']]);
+  assert.match(summary.pads[0].details[0], /reset to defaults/);
   assert.deepEqual(summary.patterns.map((item) => [item.label, item.kind]), [['D1', 'remove']]);
   assert.equal(summary.removals, 1);
 
@@ -302,4 +304,24 @@ test('cancelling a queued import or pattern in an empty slot is not a deletion',
   const overBaseline = baselineOf(over);
   Object.assign(over.pads.A1, { convert: true, externalFile: '/x/a.wav', remove: true });
   assert.deepEqual(summarizeChanges(overBaseline, over).pads.map((item) => [item.label, item.kind]), [['A1', 'remove']]);
+});
+
+test('settings edited after dragging a queued import to another pad are still listed', () => {
+  const state = editor();
+  state.pads.B3.volume = 40;
+  const baseline = baselineOf(state);
+  Object.assign(state.pads.B3, { convert: true, avaliable: false, externalFile: '/x/kick.wav' });
+  assert.equal(transferPads(state.pads, 'B3', 'C4'), false, 'C4 is outside this fixture');
+  assert.equal(transferPads(state.pads, 'B3', 'B8'), true);
+  state.pads.B8.volume = 100;
+  state.pads.B8.gate = false;
+
+  const summary = summarizeChanges(baseline, state);
+  assert.deepEqual(summary.pads.map((item) => [item.label, item.details]), [
+    ['B8', ['Import kick.wav', 'Volume: 40 → 100', 'Gate: on → off']],
+  ]);
+
+  // Moving it again keeps pointing at the slot the settings started on.
+  assert.equal(transferPads(state.pads, 'B8', 'B9'), true);
+  assert.deepEqual(summarizeChanges(baseline, state).pads.map((item) => [item.label, item.details[1]]), [['B9', 'Volume: 40 → 100']]);
 });

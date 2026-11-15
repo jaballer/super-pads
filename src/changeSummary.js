@@ -84,9 +84,12 @@ function summarizePad(pad, baselinePads, fates) {
   let kind = 'edit';
 
   if (pad.remove) {
-    // Removing a queued import from a slot that never held a sample only cancels the import; nothing on the card goes.
+    // Removing a queued import from a slot that never held a sample deletes no audio, but the write still resets
+    // the slot's settings to the sampler defaults, which can differ from what the card holds.
     const origin = baselinePads[labelFromFilename(pad.sourceFilename || pad.filename)];
-    if (!origin?.samplePresent) return undefined;
+    if (!origin?.samplePresent) {
+      return { label: pad.label, kind: 'edit', details: ['Cancel the queued import (the slot\'s settings are reset to defaults)'] };
+    }
     return { label: pad.label, kind: 'remove', details: ['Remove sample'] };
   }
   if (pad.convert) {
@@ -95,9 +98,10 @@ function summarizePad(pad, baselinePads, fates) {
     // A sample that moved away before this import is not replaced here; one that has no other home is.
     const replaces = saved?.samplePresent && !fates.kept.has(pad.label);
     details.push(`Import ${name}${replaces ? ' (replaces the existing sample)' : ''}`);
-    // The import keeps the slot's settings, and edits made after queuing it are saved too. A moved pad's settings
-    // came from another slot, so they cannot be compared with this one.
-    if (!pad.relocated) details.push(...settingChanges(saved, pad));
+    // The import keeps the settings of the slot it was queued on, and edits made afterwards are saved too. A moved
+    // import carries the label of that slot with it.
+    const settingsFrom = pad.settingsOrigin || (pad.relocated ? undefined : pad.label);
+    if (settingsFrom) details.push(...settingChanges(baselinePads[settingsFrom], pad));
   } else if (pad.relocated && !pad.samplePresent) {
     // The vacated half of a move is reported at the slot that receives the sample.
     return undefined;

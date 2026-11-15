@@ -229,8 +229,19 @@ const confirmChanges = (summary) => new Promise((resolve) => {
   if (summary.other.length) list.append(reviewSection('Other', summary.other));
   list.scrollTop = 0;
   reviewDialog.returnValue = '';
-  // Escape closes the dialog with no value, which counts as keeping the edits.
-  reviewDialog.addEventListener('close', () => resolve(reviewDialog.returnValue === 'write'), { once: true });
+  // Buttons answer immediately; the close event is the fallback, and Escape closes with no value (keep editing).
+  const answer = new AbortController();
+  const settle = (confirmed) => {
+    answer.abort();
+    resolve(confirmed);
+  };
+  const { signal } = answer;
+  reviewDialog.querySelector('.confirm-review').addEventListener('click', () => settle(true), { signal });
+  reviewDialog.querySelector('.cancel-review').addEventListener('click', () => settle(false), { signal });
+  // A close event is delivered asynchronously, so one from an earlier dialog can arrive after this one has opened.
+  reviewDialog.addEventListener('close', () => {
+    if (!reviewDialog.open) settle(reviewDialog.returnValue === 'write');
+  }, { signal });
   reviewDialog.showModal();
   reviewDialog.querySelector('.confirm-review').focus();
 });

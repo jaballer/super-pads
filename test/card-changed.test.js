@@ -22,14 +22,20 @@ async function open(card) {
   };
 }
 
-test('fingerprint tracks every sampler-owned file and ignores editor metadata', async (t) => {
+test('fingerprint tracks every sampler-owned file and the editor metadata', async (t) => {
   const card = await createCard();
   t.after(() => fs.rmSync(card.root, { recursive: true, force: true }));
   const baseline = cardFingerprint(card.root);
   assert.equal(cardFingerprint(card.root), baseline);
 
-  // Editor-only metadata is written by this app and must not invalidate its own session.
-  fs.writeFileSync(path.join(card.root, 'super-pads.json'), '{}');
+  // Saved editor metadata (pattern names, export tempos) is part of what a session was built from.
+  const metadataFile = path.join(card.root, 'super-pads.json');
+  fs.writeFileSync(metadataFile, '{}');
+  const withMetadata = cardFingerprint(card.root);
+  assert.notEqual(withMetadata, baseline);
+  fs.writeFileSync(metadataFile, '{"patterns":{}}');
+  assert.notEqual(cardFingerprint(card.root), withMetadata);
+  fs.rmSync(metadataFile);
   assert.equal(cardFingerprint(card.root), baseline);
 
   const sample = path.join(card.directory, 'A0000001.WAV');
@@ -205,4 +211,40 @@ test('a changed stretch in the middle of a long sample is noticed', async (t) =>
   fs.writeFileSync(sample, bytes);
   fs.utimesSync(sample, stamp, stamp);
   assert.notEqual(cardFingerprint(card.root), before);
+});
+
+test('a card whose metadata differs is refused even when its sampler files match', async (t) => {
+  const card = await createCard();
+  t.after(() => fs.rmSync(card.root, { recursive: true, force: true }));
+  const { state, fingerprint } = await open(card);
+  fs.writeFileSync(path.join(card.root, 'super-pads.json'), JSON.stringify({ patterns: { A1: { name: 'other card' } } }));
+  await assert.rejects(writeCard({ root: card.root, state, fingerprint }), /card has changed/);
+});
+
+test('no fingerprint is issued when the card stops matching the data that was just saved', async (t) => {
+  const card = await createCard();
+  t.after(() => fs.rmSync(card.root, { recursive: true, force: true }));
+  const { state, fingerprint } = await open(card);
+  state.pads.A1.volume = 33;
+  const info = path.join(card.directory, 'PAD_INFO.BIN');
+
+  // Swap the card's contents right after the commit has finished, before the post-save scan.
+  const original = fs.rmSync;
+  let completions = 0;
+  const tamper = mock.method(fs, 'rmSync', (...args) => {
+    const result = original.apply(fs, args);
+    // The first call is the recovery pass at the start of the save; the second is the commit's own cleanup.
+    if (String(args[0]).endsWith('-complete') && ++completions === 2) {
+      const bytes = fs.readFileSync(info);
+      bytes[5] ^= 0xff;
+      fs.writeFileSync(info, bytes);
+    }
+    return result;
+  });
+  t.after(() => tamper.mock.restore());
+
+  const result = await writeCard({ root: card.root, state, fingerprint });
+  tamper.mock.restore();
+  assert.equal(result.fingerprint, undefined);
+  assert.match(result.warning, /could not be verified afterwards.*Reopen it/);
 });
