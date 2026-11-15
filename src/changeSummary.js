@@ -36,20 +36,25 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Fields the review describes for a pad that was only edited in place. */
 const DESCRIBED_PAD_FIELDS = [...SETTINGS.map(([field]) => field), 'targetChannels'];
+/** Fields a queued import sets itself, which are described by the import line. */
+const IMPORT_PAD_FIELDS = ['convert', 'externalFile', 'externalFileSize', 'avaliable'];
 /** Fields the review describes for a pattern slot that was neither imported nor removed. */
 const DESCRIBED_PATTERN_FIELDS = ['bpm', 'noteMap'];
 
 /**
  * Whether anything changed that the lists above cannot describe, independent of what else was summarized.
- * Pads and slots that were moved, imported, or removed legitimately change most fields and are described as a whole,
- * so only edited-in-place entries are compared, minus the fields the review reports by name.
+ * Pads that were moved or removed, and slots that were imported or removed, legitimately change most fields and are
+ * described as a whole, so only the others are compared, minus the fields the review reports by name.
  */
 function hasUndescribedChanges(baseline, current) {
   const sameKeys = (a, b) => same(Object.keys(a || {}), Object.keys(b || {}));
   if (!sameKeys(baseline.pads, current.pads) || !sameKeys(baseline.patterns, current.patterns)) return true;
-  const plainPad = (pad) => !pad.convert && !pad.remove && !pad.relocated;
-  const padsChanged = Object.values(current.pads || {}).some((pad) => plainPad(pad)
-    && !same(without(pad, DESCRIBED_PAD_FIELDS), without(baseline.pads[pad.label], DESCRIBED_PAD_FIELDS)));
+  const plainPad = (pad) => !pad.remove && !pad.relocated;
+  const padsChanged = Object.values(current.pads || {}).some((pad) => {
+    if (!plainPad(pad)) return false;
+    const ignored = pad.convert ? [...DESCRIBED_PAD_FIELDS, ...IMPORT_PAD_FIELDS] : DESCRIBED_PAD_FIELDS;
+    return !same(without(pad, ignored), without(baseline.pads[pad.label], ignored));
+  });
   if (padsChanged) return true;
   return Object.values(current.patterns || {}).some((slot) => !slot.dirty && !slot.remove
     && !same(without(slot, DESCRIBED_PATTERN_FIELDS), without(baseline.patterns[slot.label], DESCRIBED_PATTERN_FIELDS)));
@@ -87,6 +92,9 @@ function summarizePad(pad, baselinePads, fates) {
     // A sample that moved away before this import is not replaced here; one that has no other home is.
     const replaces = saved?.samplePresent && !fates.kept.has(pad.label);
     details.push(`Import ${name}${replaces ? ' (replaces the existing sample)' : ''}`);
+    // The import keeps the slot's settings, and edits made after queuing it are saved too. A moved pad's settings
+    // came from another slot, so they cannot be compared with this one.
+    if (!pad.relocated) details.push(...settingChanges(saved, pad));
   } else if (pad.relocated && !pad.samplePresent) {
     // The vacated half of a move is reported at the slot that receives the sample.
     return undefined;
@@ -100,7 +108,6 @@ function summarizePad(pad, baselinePads, fates) {
     details.push(...settingChanges(saved, pad));
   }
 
-  // An import's settings belong to the new audio and are not diffed above, but a channel conversion still matters.
   if (pad.targetChannels && pad.targetChannels !== pad.channels) {
     details.push(pad.samplePresent || pad.convert ? `Convert to ${pad.targetChannels.toLowerCase()}` : `${pad.targetChannels} for the next import`);
   }
@@ -120,11 +127,16 @@ function summarizePattern(slot, baselinePatterns) {
     return details.length ? { label: slot.label, kind: 'edit', details } : undefined;
   }
   const name = typeof slot.name === 'string' && slot.name ? ` ${slot.name}` : '';
+  const details = [];
   let replaces = '';
   if (saved?.bytes) replaces = ' (replaces the existing pattern)';
   // An occupied slot whose file could not be parsed still holds card data that the import overwrites.
   else if (saved?.error) replaces = ' (replaces an unreadable pattern file)';
-  return { label: slot.label, kind: 'import', details: [`Import pattern${name}${replaces}`] };
+  details.push(`Import pattern${name}${replaces}`);
+  // Export settings set on the new pattern are saved with the editor state as well.
+  if (slot.bpm !== undefined) details.push(`Export BPM: ${slot.bpm}`);
+  if (slot.noteMap) details.push('Remember the MIDI note assignment used for export');
+  return { label: slot.label, kind: 'import', details };
 }
 
 /**

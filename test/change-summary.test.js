@@ -244,8 +244,37 @@ test('legitimate moves, imports, and removals do not produce a catch-all entry',
   const state = editor();
   const baseline = baselineOf(state);
   assert.equal(transferPads(state.pads, 'A1', 'B5'), true);
-  Object.assign(state.pads.B2, { convert: true, avaliable: false, externalFile: '/x/a.wav', size: 999 });
+  Object.assign(state.pads.B2, { convert: true, avaliable: false, externalFile: '/x/a.wav', externalFileSize: 999 });
   state.pads.A2.remove = true;
   state.pads.B9.volume = 3;
   assert.equal(summarizeChanges(baseline, state).other.length, 0);
+});
+
+test('settings edited after queuing an import are listed with it', () => {
+  const state = editor();
+  const baseline = baselineOf(state);
+  Object.assign(state.pads.B3, { convert: true, avaliable: false, externalFile: '/x/kick.wav' });
+  state.pads.B3.volume = 90;
+  state.pads.B3.loop = true;
+
+  const summary = summarizeChanges(baseline, state);
+  assert.deepEqual(summary.pads.map((item) => [item.label, item.details]), [
+    ['B3', ['Import kick.wav', 'Volume: 64 → 90', 'Loop: off → on']],
+  ]);
+  assert.equal(summary.other.length, 0);
+
+  // An undescribed field edited on a queued import is still caught.
+  state.pads.B3.format = 'AIFF';
+  assert.equal(summarizeChanges(baseline, state).other.length, 1);
+});
+
+test('export settings on a freshly imported pattern are listed', () => {
+  const state = editor();
+  const baseline = baselineOf(state);
+  Object.assign(state.patterns.D4, {
+    dirty: true, bytes: [4], summary: {}, name: 'groove.mid', bpm: 96, noteMap: { 36: 'A1' },
+  });
+  assert.deepEqual(summarizeChanges(baseline, state).patterns.map((item) => item.details), [
+    ['Import pattern groove.mid', 'Export BPM: 96', 'Remember the MIDI note assignment used for export'],
+  ]);
 });
