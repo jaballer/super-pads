@@ -40,7 +40,7 @@ test('an untouched editor has nothing to review', () => {
   const state = editor();
   const summary = summarizeChanges(baselineOf(state), state);
   assert.deepEqual(summary, {
-    pads: [], patterns: [], count: 0, removals: 0,
+    pads: [], patterns: [], other: [], count: 0, removals: 0,
   });
 });
 
@@ -138,4 +138,32 @@ test('missing baselines are tolerated', () => {
   state.pads.A1.volume = 1;
   assert.doesNotThrow(() => summarizeChanges(undefined, state));
   assert.equal(summarizeChanges(undefined, undefined).count, 0);
+});
+
+test('pattern BPM and remembered note maps are reviewed even though the pattern file is untouched', () => {
+  const state = editor();
+  state.patterns.C2 = { ...state.patterns.C2, bytes: [1], summary: {}, bpm: 120 };
+  const baseline = baselineOf(state);
+  state.patterns.C2.bpm = 98;
+  state.patterns.C2.noteMap = { 36: 'A1' };
+  state.patterns.C3 = { ...state.patterns.C3, bytes: [1], summary: {} };
+  baseline.patterns.C3 = JSON.parse(JSON.stringify(state.patterns.C3));
+  state.patterns.C3.bpm = 140;
+
+  const summary = summarizeChanges(baseline, state);
+  assert.deepEqual(summary.patterns.map((item) => [item.label, item.kind, item.details]), [
+    ['C2', 'edit', ['BPM: 120 → 98', 'Remember the MIDI note assignment used for export']],
+    ['C3', 'edit', ['BPM: not set → 140']],
+  ]);
+  assert.equal(summary.other.length, 0);
+});
+
+test('an edit with no description still counts as a change instead of passing as nothing to review', () => {
+  const state = editor();
+  const baseline = baselineOf(state);
+  state.pads.B7.format = 'AIFF'; // a field the review does not describe
+  const summary = summarizeChanges(baseline, state);
+  assert.equal(summary.pads.length + summary.patterns.length, 0);
+  assert.equal(summary.other.length, 1);
+  assert.equal(summary.count, 1);
 });

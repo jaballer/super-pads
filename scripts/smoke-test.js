@@ -194,6 +194,16 @@ async function checkChangeReview(evaluate) {
   assert.equal(await evaluate('JSON.stringify(state)'), queued);
   assert.deepEqual(fs.readFileSync(info), before);
 
+  // An update that lands while the review is open voids it: nothing is written and the user is told why.
+  await evaluate(`document.querySelector('button.write-card').click(); state.pads.B2.volume = 5;`);
+  await evaluate(`${dialog}.querySelector('.confirm-review').click()`);
+  await waitFor(() => evaluate(`getComputedStyle(document.querySelector('p.errors')).display !== 'none'`), 'stale review reported');
+  assert.match(await evaluate(`document.querySelector('p.errors').textContent`), /updated while you were reviewing/);
+  assert.equal(await evaluate('busy'), false);
+  assert.deepEqual(fs.readFileSync(info), before);
+  await evaluate(`state.pads.B2.volume = ${await evaluate('JSON.parse(savedSignature)[0].B2.volume')}; hideError()`);
+  assert.equal(await evaluate('JSON.stringify(state)'), queued);
+
   // A queued removal is called out as destructive.
   await evaluate(`state.pads.A1.remove = true; document.querySelector('button.write-card').click()`);
   assert.match(await evaluate(`${dialog}.querySelector('.removals')?.textContent ?? ''`), /1 removal will delete data/);

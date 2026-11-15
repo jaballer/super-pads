@@ -68,7 +68,13 @@ function summarizePad(pad, baselinePads) {
 function summarizePattern(slot, baselinePatterns) {
   const saved = baselinePatterns[slot.label];
   if (slot.remove) return { label: slot.label, kind: 'remove', details: ['Remove pattern'] };
-  if (!slot.dirty) return undefined;
+  if (!slot.dirty) {
+    // Editor-only metadata is saved with the card's editor state even though the pattern file is untouched.
+    const details = [];
+    if (saved?.bpm !== slot.bpm) details.push(`BPM: ${saved?.bpm ?? 'not set'} → ${slot.bpm ?? 'not set'}`);
+    if (JSON.stringify(saved?.noteMap) !== JSON.stringify(slot.noteMap)) details.push('Remember the MIDI note assignment used for export');
+    return details.length ? { label: slot.label, kind: 'edit', details } : undefined;
+  }
   const name = typeof slot.name === 'string' && slot.name ? ` ${slot.name}` : '';
   const replaces = saved?.bytes ? ' (replaces the existing pattern)' : '';
   return { label: slot.label, kind: 'import', details: [`Import pattern${name}${replaces}`] };
@@ -77,7 +83,8 @@ function summarizePattern(slot, baselinePatterns) {
 /**
  * Compare the editor with the snapshot taken when the card was last read or saved, and list what a write will do.
  * Both arguments are `{ pads, patterns }` maps keyed by slot label. Pure: nothing is read from disk or modified.
- * Returns `{ pads, patterns, count, removals }`; `count` is zero when there is nothing to write.
+ * Returns `{ pads, patterns, other, count, removals }`; `count` is zero only when the two snapshots are identical.
+ * `other` is a catch-all so an edit this module does not describe can never pass as "nothing to review".
  */
 function summarizeChanges(baseline, current) {
   const baselinePads = baseline?.pads || {};
@@ -85,8 +92,13 @@ function summarizeChanges(baseline, current) {
   const pads = Object.values(current?.pads || {}).map((pad) => summarizePad(pad, baselinePads)).filter(Boolean);
   const patterns = Object.values(current?.patterns || {}).map((slot) => summarizePattern(slot, baselinePatterns)).filter(Boolean);
   const removals = [...pads, ...patterns].filter((item) => item.kind === 'remove').length;
+  const other = [];
+  if (!pads.length && !patterns.length
+    && JSON.stringify([baselinePads, baselinePatterns]) !== JSON.stringify([current?.pads || {}, current?.patterns || {}])) {
+    other.push({ label: '', kind: 'edit', details: ['Editor data changed. No sample or pattern files on the card are affected.'] });
+  }
   return {
-    pads, patterns, count: pads.length + patterns.length, removals,
+    pads, patterns, other, count: pads.length + patterns.length + other.length, removals,
   };
 }
 

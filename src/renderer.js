@@ -192,6 +192,7 @@ const reviewSection = (title, items) => {
     const label = document.createElement('span');
     label.className = 'review-label';
     label.textContent = item.label;
+    label.hidden = !item.label;
     const details = document.createElement('div');
     details.className = 'review-details';
     for (const text of item.details) {
@@ -212,8 +213,9 @@ const confirmChanges = (summary) => new Promise((resolve) => {
   const parts = [];
   if (summary.pads.length) parts.push(plural(summary.pads.length, 'pad change'));
   if (summary.patterns.length) parts.push(plural(summary.patterns.length, 'pattern change'));
+  if (summary.other.length) parts.push('editor-only changes');
   const text = reviewDialog.querySelector('.review-summary');
-  text.textContent = `${parts.join(' and ')} will be written to the card.`;
+  text.textContent = `${parts.join(' and ')} will be saved to the card.`;
   if (summary.removals) {
     const removals = document.createElement('span');
     removals.className = 'removals';
@@ -224,6 +226,7 @@ const confirmChanges = (summary) => new Promise((resolve) => {
   list.replaceChildren();
   if (summary.pads.length) list.append(reviewSection('Pads', summary.pads));
   if (summary.patterns.length) list.append(reviewSection('Patterns', summary.patterns));
+  if (summary.other.length) list.append(reviewSection('Other', summary.other));
   list.scrollTop = 0;
   reviewDialog.returnValue = '';
   // Escape closes the dialog with no value, which counts as keeping the edits.
@@ -236,7 +239,14 @@ write.addEventListener('click', async () => {
   if (busy || !cardReady || reviewDialog.open) return;
   // Nothing pending still rewrites the card as before, so only real edits need a review.
   const summary = pendingChanges();
-  if (summary.count && !await confirmChanges(summary)) return;
+  if (summary.count) {
+    if (!await confirmChanges(summary)) return;
+    // The reviewed list is what the user agreed to; a card read or other update that landed meanwhile voids it.
+    if (busy || !cardReady || JSON.stringify(pendingChanges()) !== JSON.stringify(summary)) {
+      showError('The pending changes were updated while you were reviewing them. Nothing was written. Review them again.');
+      return;
+    }
+  }
   if (busy || !cardReady) return;
   busy = true;
   write.disabled = true;
