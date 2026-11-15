@@ -10,6 +10,10 @@ const { CardTransaction, recoverCard, SAMPLE_DIRECTORY } = require('./cardTransa
 const { inspectPattern } = require('./patternMetadata');
 const { patternFilename } = require('./patternSlots');
 const { PATTERN_DIRECTORY } = require('./readPatterns');
+const cardFingerprint = require('./cardFingerprint');
+
+const CARD_CHANGED = 'The card has changed since it was opened (it may have been swapped, ejected, or edited on the sampler). '
+  + 'Nothing was written. Reopen the card to continue; reopening discards your pending edits.';
 
 /** Run at most two sample-staging jobs; await every started job before allowing rollback. */
 async function stageQueuedSamples(jobs) {
@@ -39,11 +43,25 @@ function convertOffsets(pad, source, size) {
   }
 }
 
+/** Compare the card on disk with the fingerprint taken when the editor read it; unreadable cards count as changed. */
+function assertCardUnchanged(root, expected) {
+  let current;
+  try { current = cardFingerprint(root); } catch { /* An unreadable card is reported as changed below. */ }
+  if (current !== expected) throw new Error(CARD_CHANGED);
+}
+
 /**
  * Save a cloned editor snapshot as one recoverable card operation. Pending flags in the caller survive failures.
  * Stages and validates all sample changes before replacing samples, metadata, or the saved editor state.
+ * When a fingerprint from the original card read is supplied, the save is refused unless the card still matches it,
+ * before staging and again after the backups, immediately before any final file is replaced, so a swapped card or
+ * edits made on the sampler are never overwritten by a stale editor snapshot.
+ * The reply carries the card's new fingerprint for the next save.
  */
-async function writeCard({ root, state }) {
+async function writeCard({ root, state, fingerprint }) {
+  // Identity first: recovery restores and deletes sampler files, which must never happen to a card that is not
+  // the one the editor opened. Reopening the card is what recovers an interrupted journal.
+  if (fingerprint !== undefined) assertCardUnchanged(root, fingerprint);
   try { recoverCard(root); } catch (error) {
     error.recoveryRequired = true;
     throw error;
@@ -61,6 +79,8 @@ async function writeCard({ root, state }) {
     }
   }
   const transaction = new CardTransaction(root);
+  let committed;
+  let written;
   try {
     const jobs = [];
     const replacements = new Map();
@@ -126,9 +146,11 @@ async function writeCard({ root, state }) {
       delete pad.targetChannels;
       delete pad.sourceFilename;
       delete pad.relocated;
+      delete pad.settingsOrigin;
     }
     // Finish asynchronous validation before allocating the staged metadata destination.
     const metadata = await encodePads(pads);
+    written = metadata;
     for (const [label, slot] of Object.entries(snapshot.patterns || {})) {
       if (slot.label !== label || slot.filename !== patternFilename(label)) throw new Error('Invalid pattern slot identity.');
       if (!slot.dirty && !slot.remove) continue;
@@ -150,8 +172,11 @@ async function writeCard({ root, state }) {
     }
     writeNew(transaction.stage(`${SAMPLE_DIRECTORY}/PAD_INFO.BIN`), metadata);
     writeNew(transaction.stage('super-pads.json'), JSON.stringify(snapshot, null, 2));
-    const warning = transaction.commit();
-    return { pads, patterns: snapshot.patterns, warning };
+    // Staging and the backup copies inside commit can take a while, so the last check runs after both, right before
+    // the first final file is replaced. Staged files live in the transaction folder, which the fingerprint ignores,
+    // so this never trips on our own work.
+    const verify = () => { if (fingerprint !== undefined) assertCardUnchanged(root, fingerprint); };
+    committed = { pads, patterns: snapshot.patterns, warning: transaction.commit(verify) };
   } catch (error) {
     try { transaction.rollback(); } catch (recoveryError) {
       const pending = new Error(`${error.message} Recovery is pending; reopen this card to retry recovery. ${recoveryError.message}`);
@@ -160,6 +185,19 @@ async function writeCard({ root, state }) {
     }
     throw error;
   }
+  // The save is durable here; a failure to verify the card must not be reported as a failed save. The returned
+  // fingerprint becomes the editor's next baseline, so it is only issued when the card still holds exactly what
+  // was just written and did not change while it was scanned. Otherwise the editor must reopen the card.
+  try {
+    const fresh = cardFingerprint(root);
+    if (!fs.readFileSync(path.join(root, SAMPLE_DIRECTORY, 'PAD_INFO.BIN')).equals(written)) throw new Error('the card no longer holds the saved data');
+    if (cardFingerprint(root) !== fresh) throw new Error('the card changed while it was being read');
+    committed.fingerprint = fresh;
+  } catch (error) {
+    const note = `Saved, but the card could not be verified afterwards (${error.message}). Reopen it before saving again.`;
+    committed.warning = committed.warning ? `${committed.warning} ${note}` : note;
+  }
+  return committed;
 }
 
 module.exports = writeCard;

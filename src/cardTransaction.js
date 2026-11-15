@@ -84,14 +84,21 @@ class CardTransaction {
     return staged;
   }
 
-  /** Commit all replacements/deletions. Returns a warning only when post-commit cleanup fails. */
-  commit() {
+  /**
+   * Commit all replacements/deletions. Returns a warning only when post-commit cleanup fails.
+   * `beforePublish` runs once the backups exist and immediately before the journal is written, so before any final
+   * file changes. If it throws, nothing was published and rollback only discards the staging folder; it must not
+   * run later, because restoring backups would overwrite whatever changed on the card in the meantime.
+   */
+  commit(beforePublish) {
     const entries = this.entries.map((entry, index) => {
       const target = path.join(this.root, entry.target);
       const existed = fs.existsSync(target);
       if (existed) copyDurable(target, path.join(this.directory, `backup-${index}`));
       return { target: entry.target, existed };
     });
+    // Backups of large samples take time, so the caller's last check happens after them.
+    beforePublish?.();
     // No final file is touched until the backups and their journal have been flushed.
     atomicWrite(path.join(this.directory, 'journal.json'), JSON.stringify({ version: 1, entries }));
     for (const entry of this.entries) {

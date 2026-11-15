@@ -7,6 +7,7 @@ const formatBytes = require('./src/formatBytes.js');
 const { canDragPad, transferPads } = require('./src/padTransfer.js');
 const PatternPanel = require('./src/patternPanel.js');
 const { emptyPatternSlots } = require('./src/patternSlots.js');
+const summarizeChanges = require('./src/changeSummary.js');
 
 /** Custom drag data is accepted only while this renderer owns an active pad drag. */
 const PAD_DRAG_TYPE = 'application/x-super-pads-pad';
@@ -20,6 +21,13 @@ let state = {
   currentPad: 'A1',
   patterns: emptyPatternSlots(),
 };
+/** Identifies the card contents `state` was read from; saves are refused if the card no longer matches it. */
+let cardFingerprint;
+/** Everything a user can edit. Settings change pad fields in place, so edits are found by comparing snapshots. */
+const editSignature = () => JSON.stringify([state.pads, state.patterns]);
+/** Signature of the last card read or save; differing from it means edits exist that are not on the card. */
+let savedSignature = editSignature();
+const hasPendingEdits = () => editSignature() !== savedSignature;
 /** Selection belongs to this editor session; card snapshots retain only the active pad. */
 let selectedPads = new Set(['A1']);
 /** Fixed origin for repeated Shift-click ranges in bank/number order. */
@@ -164,7 +172,94 @@ for (const tab of document.querySelectorAll('.workspace-tabs [role="tab"]')) {
   });
 }
 const write = document.querySelector('button.write-card');
+
+/** What a write would change, compared with the card as last read or saved. */
+const pendingChanges = () => {
+  const [pads, patterns] = JSON.parse(savedSignature);
+  return summarizeChanges({ pads, patterns }, state);
+};
+
+const reviewDialog = document.querySelector('dialog.change-review');
+/** Build one titled list of changes. Text comes from card and file names, so it is never parsed as HTML. */
+const reviewSection = (title, items) => {
+  const section = document.createDocumentFragment();
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  const list = document.createElement('ul');
+  for (const item of items) {
+    const row = document.createElement('li');
+    row.className = `kind-${item.kind}`;
+    const label = document.createElement('span');
+    label.className = 'review-label';
+    label.textContent = item.label;
+    label.hidden = !item.label;
+    const details = document.createElement('div');
+    details.className = 'review-details';
+    for (const text of item.details) {
+      const line = document.createElement('div');
+      line.textContent = text;
+      details.append(line);
+    }
+    row.append(label, details);
+    list.append(row);
+  }
+  section.append(heading, list);
+  return section;
+};
+
+/** Show the pending changes in a modal and resolve true only when the user confirms the write. */
+const confirmChanges = (summary) => new Promise((resolve) => {
+  const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+  const parts = [];
+  if (summary.pads.length) parts.push(plural(summary.pads.length, 'pad change'));
+  if (summary.patterns.length) parts.push(plural(summary.patterns.length, 'pattern change'));
+  if (summary.other.length) parts.push('editor-only changes');
+  const text = reviewDialog.querySelector('.review-summary');
+  text.textContent = `${parts.join(' and ')} will be saved to the card.`;
+  if (summary.removals) {
+    const removals = document.createElement('span');
+    removals.className = 'removals';
+    removals.textContent = ` ${plural(summary.removals, 'removal')} will delete data from the card.`;
+    text.append(removals);
+  }
+  const list = reviewDialog.querySelector('.review-list');
+  list.replaceChildren();
+  if (summary.pads.length) list.append(reviewSection('Pads', summary.pads));
+  if (summary.patterns.length) list.append(reviewSection('Patterns', summary.patterns));
+  if (summary.other.length) list.append(reviewSection('Other', summary.other));
+  list.scrollTop = 0;
+  reviewDialog.returnValue = '';
+  // Buttons answer immediately; the close event is the fallback, and Escape closes with no value (keep editing).
+  const answer = new AbortController();
+  const settle = (confirmed) => {
+    answer.abort();
+    resolve(confirmed);
+  };
+  const { signal } = answer;
+  reviewDialog.querySelector('.confirm-review').addEventListener('click', () => settle(true), { signal });
+  reviewDialog.querySelector('.cancel-review').addEventListener('click', () => settle(false), { signal });
+  // A close event is delivered asynchronously, so one from an earlier dialog can arrive after this one has opened.
+  reviewDialog.addEventListener('close', () => {
+    if (!reviewDialog.open) settle(reviewDialog.returnValue === 'write');
+  }, { signal });
+  reviewDialog.showModal();
+  reviewDialog.querySelector('.confirm-review').focus();
+});
+
 write.addEventListener('click', async () => {
+  if (busy || !cardReady || reviewDialog.open) return;
+  // Nothing pending still rewrites the card as before, so only real edits need a review.
+  const summary = pendingChanges();
+  if (summary.count) {
+    // The exact state being reviewed, not just its summary: a different source file with the same name reads alike.
+    const reviewed = editSignature();
+    if (!await confirmChanges(summary)) return;
+    // The reviewed state is what the user agreed to; a card read or other update that landed meanwhile voids it.
+    if (busy || !cardReady || editSignature() !== reviewed) {
+      showError('The pending changes were updated while you were reviewing them. Nothing was written. Review them again.');
+      return;
+    }
+  }
   if (busy || !cardReady) return;
   busy = true;
   write.disabled = true;
@@ -172,10 +267,14 @@ write.addEventListener('click', async () => {
   preview.clear();
   showLoading();
   try {
-    const { pads, patterns, warning } = await runWorker('writeCard', { root: state.root, state });
+    const {
+      pads, patterns, warning, fingerprint,
+    } = await runWorker('writeCard', { root: state.root, state, fingerprint: cardFingerprint });
     preview.cache.clear();
     state.pads = Object.fromEntries(pads.map((pad) => [pad.label, pad]));
     state.patterns = patterns || emptyPatternSlots();
+    cardFingerprint = fingerprint;
+    savedSignature = editSignature();
     renderPads();
     patternPanel.render();
     if (warning) showError(warning);
@@ -579,7 +678,7 @@ document.querySelector('button.choose-folder').addEventListener('click', () => {
 });
 
 // #region IPC Main Tasks
-ipcRenderer.on('pickSDCard-task-finished', (event, { valid, root, error, canceled }) => {
+ipcRenderer.on('pickSDCard-task-finished', async (event, { valid, root, error, canceled }) => {
   if (busy || canceled) return;
   if (error) {
     document.querySelector('button.choose-folder').disabled = false;
@@ -590,11 +689,23 @@ ipcRenderer.on('pickSDCard-task-finished', (event, { valid, root, error, cancele
     document.querySelector('button.choose-folder').disabled = false;
     showError('Not a valid Roland SD Card directory root.');
   } else {
+    // Reading a card replaces the editor's state, so queued edits need an explicit decision first.
+    if (hasPendingEdits() && !await ipcRenderer.invoke('confirmDiscard')) return;
+    // Another reply may have started a read while this one waited; the root must only change together with its read.
+    if (busy) return;
     state.root = root;
 
     // Card metadata is authoritative: saved editor state can be stale after edits on the sampler.
     parsePads();
   }
+});
+
+// Closing the window or quitting would drop queued edits; main shows the confirmation (will-prevent-unload).
+window.addEventListener('beforeunload', (event) => {
+  if (!hasPendingEdits()) return;
+  event.preventDefault();
+  // eslint-disable-next-line no-param-reassign
+  event.returnValue = false;
 });
 ipcRenderer.on('pickFile-task-finished', (event, { file, error, canceled }) => {
   if (canceled) return;
@@ -619,9 +730,11 @@ const parsePads = async () => {
   preview.clear();
   showLoading();
   try {
-    const { pads, patterns } = await runWorker('parsePads', { root: state.root });
+    const { pads, patterns, fingerprint } = await runWorker('parsePads', { root: state.root });
     state.pads = Object.fromEntries(pads.map((pad) => [pad.label, { ...pad, convert: false, remove: false }]));
     state.patterns = patterns;
+    cardFingerprint = fingerprint;
+    savedSignature = editSignature();
     selectedPads = new Set([state.currentPad]);
     selectionAnchor = state.currentPad;
     cardReady = true;
@@ -632,6 +745,9 @@ const parsePads = async () => {
     preview.clear();
     togglePicker(false);
     patternPanel.render();
+    cardFingerprint = undefined;
+    // The unreadable card hides the editor, and the user already agreed to discard what it held.
+    savedSignature = editSignature();
     showError(`Card unavailable: ${error.message}`);
   } finally {
     busy = false;
